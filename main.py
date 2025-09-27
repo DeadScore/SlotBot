@@ -23,15 +23,16 @@ active_events = {}
 
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 
-# Flask Webserver für 24/7 Hosting
+# Flask Webserver für Render Free
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot läuft!"
+    return "✅ Bot läuft und ist wach!"
 
 def run():
-    app.run(host='0.0.0.0', port=3000)
+    port = int(os.environ.get("PORT", 5000))  # Render gibt PORT-Variable vor
+    app.run(host='0.0.0.0', port=port)
 
 t = Thread(target=run)
 t.start()
@@ -192,7 +193,7 @@ async def on_raw_reaction_remove(payload):
 
     await update_event_message(payload.message_id)
 
-# Optional: Neustart-Loop für dauerhaften Betrieb
+# Neustart-Loop für dauerhaften Betrieb
 async def start_bot():
     while True:
         try:
