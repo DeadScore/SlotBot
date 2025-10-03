@@ -137,17 +137,20 @@ async def event(interaction: discord.Interaction,
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
-    slot_parts = slots.split()
+    # Regex, um Slots zu erkennen, auch mit beliebigen Leerzeichen um ':'
+    slot_pattern = re.compile(r"(<a?:\w+:\d+>|.)\s*:\s*(\d+)")
+    matches = slot_pattern.findall(slots)
+    if not matches:
+        await interaction.response.send_message(
+            "❌ Keine gültigen Slots gefunden. Format: Emoji:2 oder Emoji : 2",
+            ephemeral=True
+        )
+        return
+
     slot_dict = {}
     description = "📋 **Event-Teilnehmerübersicht** 📋\n"
 
-    # Slots parsen mit optionalen Leerzeichen um ':'
-    for part in slot_parts:
-        match = re.match(r"(.+?)\s*:\s*(\d+)$", part)
-        if not match:
-            await interaction.response.send_message(f"❌ Ungültiges Slot-Format: {part}", ephemeral=True)
-            return
-        emoji_raw, limit_str = match.groups()
+    for emoji_raw, limit_str in matches:
         emoji = normalize_emoji(emoji_raw)
         limit = int(limit_str)
 
@@ -179,82 +182,4 @@ async def event(interaction: discord.Interaction,
         try:
             await msg.add_reaction(emoji)
         except discord.HTTPException:
-            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
-            return
-
-    active_events[msg.id] = {
-        "slots": slot_dict,
-        "channel_id": interaction.channel.id,
-        "guild_id": interaction.guild.id,
-        "header": header
-    }
-
-# Reaktionen verwalten
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.message_id not in active_events:
-        return
-    event = active_events[payload.message_id]
-    emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"]:
-        return
-    if payload.user_id == bot.user.id:
-        return
-
-    guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-    channel = guild.get_channel(event["channel_id"])
-    if not channel:
-        return
-    try:
-        await channel.fetch_message(payload.message_id)
-    except:
-        return
-    member = guild.get_member(payload.user_id)
-    if not member:
-        return
-
-    slot = event["slots"][emoji]
-    if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
-        return
-
-    if len(slot["main"]) < slot["limit"]:
-        slot["main"].add(payload.user_id)
-    else:
-        slot["waitlist"].append(payload.user_id)
-
-    await update_event_message(payload.message_id)
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    if payload.message_id not in active_events:
-        return
-    event = active_events[payload.message_id]
-    emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"]:
-        return
-
-    slot = event["slots"][emoji]
-    user_id = payload.user_id
-    if user_id in slot["main"]:
-        slot["main"].remove(user_id)
-        if slot["waitlist"]:
-            next_user = slot["waitlist"].pop(0)
-            slot["main"].add(next_user)
-    elif user_id in slot["waitlist"]:
-        slot["waitlist"].remove(user_id)
-
-    await update_event_message(payload.message_id)
-
-# Neustart-Loop für dauerhaften Betrieb
-async def start_bot():
-    while True:
-        try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    asyncio.run(start_bot())
+            awai
