@@ -18,7 +18,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Struktur: message_id -> slots, channel_id, guild_id
+# Struktur: message_id -> slots, channel_id, guild_id, header
 active_events = {}
 
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
@@ -98,26 +98,41 @@ async def on_guild_join(guild):
     except Exception as e:
         print(f"❌ Fehler beim Sync auf neuem Server {guild.name}: {e}")
 
-# Slash Command /event mit Steckbrief
+# Slash Command /event mit Dropdowns
 @bot.tree.command(name="event", description="Erstellt ein Event mit Steckbrief und begrenzten Slots.")
 @app_commands.describe(
-    art="Art des Events (z.B. PvP/PvE/RP)",
-    zweck="Zweck (z.B. EP Farmen)",
-    ort="Ort (z.B. Higewayman Hills)",
-    zeit="Zeit (z.B. heute 19 Uhr)",
-    level="Levelbereich (z.B. 5 - 10)",
+    art="Art des Events",
+    zweck="Zweck",
+    ort="Ort",
+    zeit="Zeit",
+    level="Levelbereich",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen im Format emoji:limit (z.B. 😀:5 🐱:3)"
+    slots="Slot-Definitionen (emoji:limit)"
+)
+@app_commands.choices(
+    art=[
+        app_commands.Choice(name="PvE", value="PvE"),
+        app_commands.Choice(name="PvP", value="PvP"),
+        app_commands.Choice(name="RP", value="RP")
+    ],
+    typ=[
+        app_commands.Choice(name="Gruppe", value="Gruppe"),
+        app_commands.Choice(name="Raid", value="Raid")
+    ],
+    stil=[
+        app_commands.Choice(name="Gemütlich", value="Gemütlich"),
+        app_commands.Choice(name="Organisiert", value="Organisiert")
+    ]
 )
 async def event(interaction: discord.Interaction,
-                art: str,
+                art: app_commands.Choice[str],
                 zweck: str,
                 ort: str,
                 zeit: str,
                 level: str,
-                typ: str,
-                stil: str,
+                typ: app_commands.Choice[str],
+                stil: app_commands.Choice[str],
                 slots: str):
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
@@ -148,13 +163,13 @@ async def event(interaction: discord.Interaction,
     # Steckbrief generieren
     header = (
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
-        f"**Art:** {art}\n"
+        f"**Art:** {art.value}\n"
         f"**Zweck:** {zweck}\n"
         f"**Ort:** {ort}\n"
         f"**Zeit:** {zeit}\n"
         f"**Levelbereich:** {level}\n"
-        f"**Typ:** {typ}\n"
-        f"**Stil:** {stil}\n\n"
+        f"**Typ:** {typ.value}\n"
+        f"**Stil:** {stil.value}\n\n"
         f"Reagiert mit eurer Klasse:\n"
         "<:Tank_Archetype:1345126746340458527> "
         "<:Fighter_Archetype:1345126842637484083> "
@@ -184,7 +199,7 @@ async def event(interaction: discord.Interaction,
         "header": header
     }
 
-# Reaktionen hinzufügen/entfernen
+# Reaktionen verwalten
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.message_id not in active_events:
@@ -253,4 +268,3 @@ async def start_bot():
 
 if __name__ == "__main__":
     asyncio.run(start_bot())
-
