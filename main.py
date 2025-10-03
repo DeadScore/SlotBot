@@ -108,7 +108,7 @@ async def on_guild_join(guild):
     level="Levelbereich",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen (emoji:limit)"
+    slots="Slot-Definitionen (Emoji:Limit, z.B. 😀:2 oder 😀 : 2)"
 )
 @app_commands.choices(
     art=[
@@ -141,17 +141,15 @@ async def event(interaction: discord.Interaction,
     slot_dict = {}
     description = "📋 **Event-Teilnehmerübersicht** 📋\n"
 
-    # Slots parsen
+    # Slots parsen mit optionalen Leerzeichen um ':'
     for part in slot_parts:
-        if ":" not in part:
-            continue
-        try:
-            emoji_raw, limit = part.rsplit(":", 1)
-            emoji = normalize_emoji(emoji_raw)
-            limit = int(limit)
-        except ValueError:
+        match = re.match(r"(.+?)\s*:\s*(\d+)$", part)
+        if not match:
             await interaction.response.send_message(f"❌ Ungültiges Slot-Format: {part}", ephemeral=True)
             return
+        emoji_raw, limit_str = match.groups()
+        emoji = normalize_emoji(emoji_raw)
+        limit = int(limit_str)
 
         if not is_valid_emoji(emoji_raw, interaction.guild):
             await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji_raw}", ephemeral=True)
@@ -206,7 +204,7 @@ async def on_raw_reaction_add(payload):
     guild = bot.get_guild(payload.guild_id)
     if not guild:
         return
-    channel = guild.get_channel(payload.channel_id)
+    channel = guild.get_channel(event["channel_id"])
     if not channel:
         return
     try:
