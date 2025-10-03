@@ -115,7 +115,7 @@ async def on_guild_join(guild):
     art=[
         app_commands.Choice(name="PvE", value="PvE"),
         app_commands.Choice(name="PvP", value="PvP"),
-        app_commands.Choice(name="RP", value="RP")
+        app_commands.Choice(name="PVX", value="PVX")
     ],
     typ=[
         app_commands.Choice(name="Gruppe", value="Gruppe"),
