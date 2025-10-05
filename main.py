@@ -40,7 +40,7 @@ t.start()
 # Emoji normalisieren
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
-        return emoji.strip()
+        return emoji
     if hasattr(emoji, "id") and emoji.id:
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
@@ -105,7 +105,7 @@ async def on_ready():
     art=[
         app_commands.Choice(name="PvE", value="PvE"),
         app_commands.Choice(name="PvP", value="PvP"),
-        app_commands.Choice(name="PVX", value="PVX")
+        app_commands.Choice(name="RP", value="RP")
     ],
     typ=[
         app_commands.Choice(name="Gruppe", value="Gruppe"),
@@ -128,6 +128,7 @@ async def event(interaction: discord.Interaction,
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
+    # Regex für Custom Emojis UND Standard Emojis
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
     matches = slot_pattern.findall(slots)
     if not matches:
@@ -155,6 +156,7 @@ async def event(interaction: discord.Interaction,
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
         description += f"{emoji} (0/{limit}): -\n"
 
+    # Steckbrief
     header = (
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
         f"👤 **Erstellt von:** {interaction.user.mention}\n\n"
@@ -178,6 +180,7 @@ async def event(interaction: discord.Interaction,
             await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
             return
 
+    # Event speichern
     active_events[msg.id] = {
         "slots": slot_dict,
         "channel_id": interaction.channel.id,
@@ -186,32 +189,38 @@ async def event(interaction: discord.Interaction,
         "creator_id": interaction.user.id
     }
 
-# /event_delete Command (automatisch letzte Nachricht des Erstellers)
-@bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
-async def event_delete(interaction: discord.Interaction):
-    guild = interaction.guild
-    channel = interaction.channel
-
-    # Alle Events im Channel
-    channel_events = [(mid, ev) for mid, ev in active_events.items() if ev["channel_id"] == channel.id]
-    if not channel_events:
-        await interaction.response.send_message("❌ In diesem Channel gibt es keine aktiven Events.", ephemeral=True)
+# /event_delete Command – jetzt nur noch der Ersteller kann löschen
+@bot.tree.command(name="event_delete", description="Löscht ein Event, das du erstellt hast.")
+async def event_delete(interaction: discord.Interaction, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message("❌ Ungültige Nachricht-ID.", ephemeral=True)
         return
 
-    # Admin darf alles, sonst nur eigene
-    if interaction.user.guild_permissions.manage_messages:
-        target_id, target_event = max(channel_events, key=lambda x: x[0])
-    else:
-        own_events = [(mid, ev) for mid, ev in channel_events if ev["creator_id"] == interaction.user.id]
-        if not own_events:
-            await interaction.response.send_message("❌ Du hast hier kein Event erstellt.", ephemeral=True)
-            return
-        target_id, target_event = max(own_events, key=lambda x: x[0])
+    if msg_id not in active_events:
+        await interaction.response.send_message("❌ Kein aktives Event mit dieser ID gefunden.", ephemeral=True)
+        return
+
+    event = active_events[msg_id]
+    if interaction.user.id != event["creator_id"]:
+        await interaction.response.send_message("❌ Du darfst dieses Event nicht löschen.", ephemeral=True)
+        return
+
+    guild = bot.get_guild(event["guild_id"])
+    if not guild:
+        await interaction.response.send_message("❌ Server nicht gefunden.", ephemeral=True)
+        return
+
+    channel = guild.get_channel(event["channel_id"])
+    if not channel:
+        await interaction.response.send_message("❌ Channel nicht gefunden.", ephemeral=True)
+        return
 
     try:
-        msg = await channel.fetch_message(target_id)
+        msg = await channel.fetch_message(msg_id)
         await msg.delete()
-        del active_events[target_id]
+        del active_events[msg_id]
         await interaction.response.send_message("✅ Event wurde gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
@@ -223,7 +232,9 @@ async def on_raw_reaction_add(payload):
         return
     event = active_events[payload.message_id]
     emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"] or payload.user_id == bot.user.id:
+    if emoji not in event["slots"]:
+        return
+    if payload.user_id == bot.user.id:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -234,45 +245,4 @@ async def on_raw_reaction_add(payload):
         return
 
     slot = event["slots"][emoji]
-    if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
-        return
-
-    if len(slot["main"]) < slot["limit"]:
-        slot["main"].add(payload.user_id)
-    else:
-        slot["waitlist"].append(payload.user_id)
-
-    await update_event_message(payload.message_id)
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    if payload.message_id not in active_events:
-        return
-    event = active_events[payload.message_id]
-    emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"]:
-        return
-
-    slot = event["slots"][emoji]
-    user_id = payload.user_id
-    if user_id in slot["main"]:
-        slot["main"].remove(user_id)
-        if slot["waitlist"]:
-            next_user = slot["waitlist"].pop(0)
-            slot["main"].add(next_user)
-    elif user_id in slot["waitlist"]:
-        slot["waitlist"].remove(user_id)
-
-    await update_event_message(payload.message_id)
-
-# Dauerbetrieb
-async def start_bot():
-    while True:
-        try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    asyncio.run(start_bot())
+    if payload.user_id in
