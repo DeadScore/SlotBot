@@ -7,9 +7,11 @@ import re
 import os
 import asyncio
 
-# Token aus Umgebungsvariable
-TOKEN = os.getenv('DISCORD_TOKEN')
+# === CONFIG ===
+TOKEN = os.getenv('DISCORD_TOKEN')  # Bot Token aus Umgebungsvariablen
+LOG_CHANNEL_ID = None  # Optional: Channel-ID für Lösch-Logs
 
+# === DISCORD INTENTS ===
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -18,12 +20,13 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Struktur: message_id -> slots, channel_id, guild_id, header, creator_id
+# === EVENT SPEICHER ===
+# Speichert alle aktiven Events: message_id -> {slots, channel_id, guild_id, creator_id, info}
 active_events = {}
 
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 
-# Flask Webserver für Render
+# === FLASK KEEP-ALIVE (für Hosting) ===
 app = Flask('')
 
 @app.route('/')
@@ -31,23 +34,33 @@ def home():
     return "✅ Bot läuft und ist wach!"
 
 def run():
+    """Startet Flask Webserver in eigenem Thread"""
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
-t = Thread(target=run)
-t.start()
+Thread(target=run).start()
 
-# Emoji normalisieren
+# === HILFSFUNKTIONEN ===
 def normalize_emoji(emoji):
+    """Wandelt Emoji in ein konsistentes Format um"""
     if isinstance(emoji, str):
-        return emoji
+        return emoji.strip()
     if hasattr(emoji, "id") and emoji.id:
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
 
-# Formatierung der Event-Nachricht
+def is_valid_emoji(emoji, guild):
+    """Überprüft, ob das Emoji auf dem Server existiert"""
+    if re.match(CUSTOM_EMOJI_REGEX, emoji):
+        return any(str(e) == emoji for e in guild.emojis)
+    else:
+        return True
+
 def format_event_text(event, guild):
-    text = "📋 **Event-Teilnehmerübersicht** 📋\n"
+    """Formatiert die Event-Nachricht mit Slots, Teilnehmern und Wartelisten"""
+    text = f"📋 **Event-Teilnehmerübersicht** 📋\n👤 **Erstellt von:** <@{event['creator_id']}>\n"
+    if "info" in event and event["info"]:
+        text += "\n" + event["info"] + "\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
@@ -56,8 +69,8 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
-# Event-Message aktualisieren
 async def update_event_message(message_id):
+    """Aktualisiert die Event-Nachricht, z.B. bei Reaktionsänderungen"""
     if message_id not in active_events:
         return
     event = active_events[message_id]
@@ -69,172 +82,133 @@ async def update_event_message(message_id):
         return
     try:
         message = await channel.fetch_message(message_id)
-        await message.edit(content=event["header"] + "\n" + format_event_text(event, guild))
+        await message.edit(content=format_event_text(event, guild))
     except Exception as e:
-        print(f"❌ Fehler beim Aktualisieren: {e}")
+        print(f"❌ Fehler beim Aktualisieren der Nachricht {message_id}: {e}")
 
-# Emoji-Validierung
-def is_valid_emoji(emoji, guild):
-    if re.match(CUSTOM_EMOJI_REGEX, emoji):
-        return any(str(e) == emoji for e in guild.emojis)
-    return True
-
-# Bot-Start
+# === BOT EVENTS ===
 @bot.event
 async def on_ready():
+    """Wird ausgelöst, wenn Bot erfolgreich online ist"""
     print(f"✅ Bot ist online als {bot.user}")
     try:
         synced = await bot.tree.sync()
-        print(f"📂 Slash Commands global synchronisiert ({len(synced)})")
+        print(f"📂 Slash Commands synchronisiert ({len(synced)})")
     except Exception as e:
         print(f"❌ Fehler beim Sync: {e}")
 
-# /event Command
+# === SLASH COMMANDS ===
 @bot.tree.command(name="event", description="Erstellt ein Event mit Steckbrief und begrenzten Slots.")
-@app_commands.describe(
-    art="Art des Events (PvE/PvP/RP)",
-    zweck="Zweck (z. B. EP Farmen)",
-    ort="Ort (z. B. Higewayman Hills)",
-    zeit="Zeit (z. B. heute 19 Uhr)",
-    level="Levelbereich (z. B. 5–10)",
-    typ="Gruppe oder Raid",
-    stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> :2)"
-)
-@app_commands.choices(
-    art=[
-        app_commands.Choice(name="PvE", value="PvE"),
-        app_commands.Choice(name="PvP", value="PvP"),
-        app_commands.Choice(name="RP", value="RP")
-    ],
-    typ=[
-        app_commands.Choice(name="Gruppe", value="Gruppe"),
-        app_commands.Choice(name="Raid", value="Raid")
-    ],
-    stil=[
-        app_commands.Choice(name="Gemütlich", value="Gemütlich"),
-        app_commands.Choice(name="Organisiert", value="Organisiert")
-    ]
-)
-async def event(interaction: discord.Interaction,
-                art: app_commands.Choice[str],
-                zweck: str,
-                ort: str,
-                zeit: str,
-                level: str,
-                typ: app_commands.Choice[str],
-                stil: app_commands.Choice[str],
-                slots: str):
+async def event(interaction: discord.Interaction, *, info: str = None, args: str = None):
+    """
+    Erstellt ein Event:
+    - info: Textbeschreibung (Art, Zweck, Zeit etc.)
+    - args: Slots im Format ':Emoji: :2' oder '<:Emoji:123>:3'
+    """
+    await interaction.response.defer(ephemeral=True)
 
-    print(f"📨 /event Command aufgerufen von {interaction.user}")
-
-    # Regex für Custom Emojis UND Standard Emojis
-    slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
-    matches = slot_pattern.findall(slots)
-    if not matches:
-        await interaction.response.send_message(
-            "❌ Keine gültigen Slots gefunden. Format: <:Tank:ID>:2 oder <:Tank:ID> : 2",
-            ephemeral=True
-        )
-        return
-
-    slot_dict = {}
+    slots = {}
     description = "📋 **Event-Teilnehmerübersicht** 📋\n"
 
-    for custom_emoji, custom_limit, normal_emoji, normal_limit in matches:
-        if custom_emoji:
-            emoji = normalize_emoji(custom_emoji)
-            limit = int(custom_limit)
-        else:
-            emoji = normalize_emoji(normal_emoji)
-            limit = int(normal_limit)
+    # Standardbeschreibung
+    if info:
+        description += f"\n{info}\n"
 
-        if not is_valid_emoji(emoji, interaction.guild):
-            await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
-            return
+    # Slots parsen
+    if args:
+        # Trenne nach Leerzeichen, Leerzeichen zwischen Emoji und Limit erlaubt
+        parts = [p.strip() for p in re.split(r"\s+", args) if p.strip()]
+        for i in range(0, len(parts), 2):
+            try:
+                emoji_raw = parts[i].strip()
+                limit = int(parts[i+1].replace(":", "").strip())
+                emoji = normalize_emoji(emoji_raw)
+            except Exception:
+                await interaction.followup.send(f"❌ Ungültiges Format bei `{parts[i]}`", ephemeral=True)
+                return
 
-        slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
-        description += f"{emoji} (0/{limit}): -\n"
+            if not is_valid_emoji(emoji_raw, interaction.guild):
+                await interaction.followup.send(f"❌ Ungültiges Emoji: {emoji_raw}", ephemeral=True)
+                return
 
-    # Steckbrief
-    header = (
-        f"‼️ **Neue Gruppensuche!** ‼️\n\n"
-        f"👤 **Erstellt von:** {interaction.user.mention}\n\n"
-        f"**Art:** {art.value}\n"
-        f"**Zweck:** {zweck}\n"
-        f"**Ort:** {ort}\n"
-        f"**Zeit:** {zeit}\n"
-        f"**Levelbereich:** {level}\n"
-        f"**Typ:** {typ.value}\n"
-        f"**Stil:** {stil.value}\n\n"
-        f"Reagiert mit eurer Klasse:\n"
-    )
+            slots[emoji] = {"limit": limit, "main": set(), "waitlist": []}
+            description += f"{emoji} (0/{limit}): -\n"
 
-    await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
-    msg = await interaction.channel.send(header + "\n" + description)
-
-    for emoji in slot_dict.keys():
+    # Nachricht senden und Reaktionen hinzufügen
+    msg = await interaction.channel.send(description)
+    for emoji in slots.keys():
         try:
             await msg.add_reaction(emoji)
         except discord.HTTPException:
-            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
-            return
+            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
 
     # Event speichern
     active_events[msg.id] = {
-        "slots": slot_dict,
+        "slots": slots,
         "channel_id": interaction.channel.id,
         "guild_id": interaction.guild.id,
-        "header": header,
-        "creator_id": interaction.user.id
+        "creator_id": interaction.user.id,
+        "info": info or ""
     }
 
-# /event_delete Command
-@bot.tree.command(name="event_delete", description="Löscht ein Event, das du erstellt hast (oder als Admin).")
-async def event_delete(interaction: discord.Interaction, message_id: str):
+    await interaction.followup.send("✅ Event wurde erstellt!", ephemeral=True)
+
+# === EVENT DELETE ===
+@bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
+async def event_delete(interaction: discord.Interaction):
+    """
+    Löscht automatisch:
+    - das letzte Event des Erstellers
+    - oder, falls Admin, jedes Event im Channel
+    """
+    guild = interaction.guild
+    channel = interaction.channel
+
+    # Alle Events im Channel finden
+    user_events = [
+        (mid, ev) for mid, ev in active_events.items()
+        if ev["channel_id"] == channel.id
+    ]
+
+    if not user_events:
+        await interaction.response.send_message("❌ In diesem Channel gibt es keine aktiven Events.", ephemeral=True)
+        return
+
+    # Admin darf alles löschen
+    if interaction.user.guild_permissions.manage_messages:
+        latest_id, latest_event = max(user_events, key=lambda x: x[0])
+    else:
+        # Nur eigene Events
+        user_own = [(mid, ev) for mid, ev in user_events if ev["creator_id"] == interaction.user.id]
+        if not user_own:
+            await interaction.response.send_message("❌ Du hast hier kein Event erstellt.", ephemeral=True)
+            return
+        latest_id, latest_event = max(user_own, key=lambda x: x[0])
+
     try:
-        msg_id = int(message_id)
-    except ValueError:
-        await interaction.response.send_message("❌ Ungültige Nachricht-ID.", ephemeral=True)
-        return
-
-    if msg_id not in active_events:
-        await interaction.response.send_message("❌ Kein aktives Event mit dieser ID gefunden.", ephemeral=True)
-        return
-
-    event = active_events[msg_id]
-    if interaction.user.id != event["creator_id"] and not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ Du darfst dieses Event nicht löschen.", ephemeral=True)
-        return
-
-    guild = bot.get_guild(event["guild_id"])
-    if not guild:
-        await interaction.response.send_message("❌ Server nicht gefunden.", ephemeral=True)
-        return
-
-    channel = guild.get_channel(event["channel_id"])
-    if not channel:
-        await interaction.response.send_message("❌ Channel nicht gefunden.", ephemeral=True)
-        return
-
-    try:
-        msg = await channel.fetch_message(msg_id)
+        msg = await channel.fetch_message(latest_id)
         await msg.delete()
-        del active_events[msg_id]
-        await interaction.response.send_message("✅ Event wurde gelöscht.", ephemeral=True)
+        del active_events[latest_id]
+        await interaction.response.send_message("✅ Dein letztes Event wurde gelöscht.", ephemeral=True)
+
+        # Optional: Log
+        if LOG_CHANNEL_ID:
+            log_channel = guild.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(f"🗑️ **Event gelöscht:** von {interaction.user.mention} (ID: `{latest_id}`) im Channel {channel.mention}")
+
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
-# Reaktionen verwalten
+# === REAKTIONEN HANDHABEN ===
 @bot.event
 async def on_raw_reaction_add(payload):
+    """Wenn jemand eine Reaktion hinzufügt"""
     if payload.message_id not in active_events:
         return
     event = active_events[payload.message_id]
     emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"]:
-        return
-    if payload.user_id == bot.user.id:
+    if emoji not in event["slots"] or payload.user_id == bot.user.id:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -257,6 +231,7 @@ async def on_raw_reaction_add(payload):
 
 @bot.event
 async def on_raw_reaction_remove(payload):
+    """Wenn jemand eine Reaktion entfernt"""
     if payload.message_id not in active_events:
         return
     event = active_events[payload.message_id]
@@ -276,8 +251,9 @@ async def on_raw_reaction_remove(payload):
 
     await update_event_message(payload.message_id)
 
-# Dauerbetrieb
+# === BOT START ===
 async def start_bot():
+    """Startet den Bot mit automatischem Neustart bei Absturz"""
     while True:
         try:
             await bot.start(TOKEN)
@@ -287,4 +263,3 @@ async def start_bot():
 
 if __name__ == "__main__":
     asyncio.run(start_bot())
-
