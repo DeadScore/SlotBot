@@ -47,13 +47,14 @@ def normalize_emoji(emoji):
 
 # Formatierung der Event-Nachricht
 def format_event_text(event, guild):
-    text = "📋 **Event-Teilnehmerübersicht** 📋\n"
+    text = "📋 **Eventübersicht** 📋\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
         text += f"\n{emoji} ({len(main_users)}/{slot['limit']}): " + (", ".join(main_users) if main_users else "-")
         if wait_users:
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
+    text += "\n"
     return text
 
 # Event-Message aktualisieren
@@ -99,7 +100,8 @@ async def on_ready():
     level="Levelbereich (z. B. 5–10)",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> :2)"
+    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> :2)",
+    gruppenlead="(Optional) Name oder Mention des Gruppenleiters"
 )
 @app_commands.choices(
     art=[
@@ -124,7 +126,8 @@ async def event(interaction: discord.Interaction,
                 level: str,
                 typ: app_commands.Choice[str],
                 stil: app_commands.Choice[str],
-                slots: str):
+                slots: str,
+                gruppenlead: str = None):
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
@@ -138,7 +141,7 @@ async def event(interaction: discord.Interaction,
         return
 
     slot_dict = {}
-    description = "📋 **Event-Teilnehmerübersicht** 📋\n"
+    description = "📋 **Eventübersicht** 📋\n"
 
     for custom_emoji, custom_limit, normal_emoji, normal_limit in matches:
         if custom_emoji:
@@ -157,16 +160,19 @@ async def event(interaction: discord.Interaction,
 
     header = (
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
-        f"👤 **Erstellt von:** {interaction.user.mention}\n\n"
         f"**Art:** {art.value}\n"
         f"**Zweck:** {zweck}\n"
         f"**Ort:** {ort}\n"
         f"**Zeit:** {zeit}\n"
         f"**Levelbereich:** {level}\n"
         f"**Typ:** {typ.value}\n"
-        f"**Stil:** {stil.value}\n\n"
-        f"Reagiert mit eurer Klasse:\n"
+        f"**Stil:** {stil.value}\n"
     )
+
+    if gruppenlead:
+        header += f"**Gruppenlead:** {gruppenlead}\n"
+
+    header += "\nReagiert mit eurer Klasse:\n"
 
     await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n" + description)
@@ -186,19 +192,17 @@ async def event(interaction: discord.Interaction,
         "creator_id": interaction.user.id
     }
 
-# /event_delete Command (automatisch letzte Nachricht des Erstellers)
+# /event_delete Command
 @bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
 async def event_delete(interaction: discord.Interaction):
     guild = interaction.guild
     channel = interaction.channel
 
-    # Alle Events im Channel
     channel_events = [(mid, ev) for mid, ev in active_events.items() if ev["channel_id"] == channel.id]
     if not channel_events:
         await interaction.response.send_message("❌ In diesem Channel gibt es keine aktiven Events.", ephemeral=True)
         return
 
-    # Admin darf alles, sonst nur eigene
     if interaction.user.guild_permissions.manage_messages:
         target_id, target_event = max(channel_events, key=lambda x: x[0])
     else:
@@ -232,6 +236,15 @@ async def on_raw_reaction_add(payload):
     member = guild.get_member(payload.user_id)
     if not member:
         return
+
+    # Nur eine Reaktion pro User erlauben
+    for e in event["slots"].keys():
+        if e != emoji:
+            try:
+                message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
+                await message.remove_reaction(e, member)
+            except Exception:
+                pass
 
     slot = event["slots"][emoji]
     if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
