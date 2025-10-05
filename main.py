@@ -128,10 +128,13 @@ async def event(interaction: discord.Interaction,
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
+    # Sofort acken
+    await interaction.response.defer(ephemeral=True)
+
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
     matches = slot_pattern.findall(slots)
     if not matches:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ Keine gültigen Slots gefunden. Format: <:Tank:ID>:2 oder <:Tank:ID> : 2",
             ephemeral=True
         )
@@ -149,7 +152,7 @@ async def event(interaction: discord.Interaction,
             limit = int(normal_limit)
 
         if not is_valid_emoji(emoji, interaction.guild):
-            await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
+            await interaction.followup.send(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
             return
 
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
@@ -168,26 +171,30 @@ async def event(interaction: discord.Interaction,
         f"Reagiert mit eurer Klasse:\n"
     )
 
-    await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n" + description)
 
-    for emoji in slot_dict.keys():
-        try:
-            await msg.add_reaction(emoji)
-        except discord.HTTPException:
-            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
-            return
+    async def add_reactions():
+        for emoji in slot_dict.keys():
+            try:
+                await msg.add_reaction(emoji)
+            except discord.HTTPException:
+                await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
 
-    active_events[msg.id] = {
-        "slots": slot_dict,
-        "channel_id": interaction.channel.id,
-        "guild_id": interaction.guild.id,
-        "header": header,
-        "creator_id": interaction.user.id
-    }
+        # Event speichern
+        active_events[msg.id] = {
+            "slots": slot_dict,
+            "channel_id": interaction.channel.id,
+            "guild_id": interaction.guild.id,
+            "header": header,
+            "creator_id": interaction.user.id
+        }
 
-# /event_delete Command – nur Ersteller kann löschen
-@bot.tree.command(name="event_delete", description="Löscht ein Event, das du erstellt hast.")
+    asyncio.create_task(add_reactions())
+
+    await interaction.followup.send("✅ Event wurde erstellt!", ephemeral=True)
+
+# /event_delete Command
+@bot.tree.command(name="event_delete", description="Löscht dein Event.")
 async def event_delete(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
@@ -200,6 +207,8 @@ async def event_delete(interaction: discord.Interaction, message_id: str):
         return
 
     event = active_events[msg_id]
+
+    # Nur der Ersteller darf löschen
     if interaction.user.id != event["creator_id"]:
         await interaction.response.send_message("❌ Du darfst dieses Event nicht löschen.", ephemeral=True)
         return
@@ -233,7 +242,9 @@ async def on_raw_reaction_add(payload):
         return
 
     guild = bot.get_guild(payload.guild_id)
-    member = guild.get_member(payload.user_id) if guild else None
+    if not guild:
+        return
+    member = guild.get_member(payload.user_id)
     if not member:
         return
 
@@ -259,4 +270,24 @@ async def on_raw_reaction_remove(payload):
 
     slot = event["slots"][emoji]
     user_id = payload.user_id
-   
+    if user_id in slot["main"]:
+        slot["main"].remove(user_id)
+        if slot["waitlist"]:
+            next_user = slot["waitlist"].pop(0)
+            slot["main"].add(next_user)
+    elif user_id in slot["waitlist"]:
+        slot["waitlist"].remove(user_id)
+
+    await update_event_message(payload.message_id)
+
+# Dauerbetrieb
+async def start_bot():
+    while True:
+        try:
+            await bot.start(TOKEN)
+        except Exception as e:
+            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(start_bot())
