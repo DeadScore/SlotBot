@@ -37,7 +37,6 @@ def run():
 t = Thread(target=run)
 t.start()
 
-# Emoji normalisieren
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji
@@ -45,7 +44,6 @@ def normalize_emoji(emoji):
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
 
-# Formatierung der Event-Nachricht
 def format_event_text(event, guild):
     text = "📋 **Event-Teilnehmerübersicht** 📋\n"
     for emoji, slot in event["slots"].items():
@@ -56,7 +54,6 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
-# Event-Message aktualisieren
 async def update_event_message(message_id):
     if message_id not in active_events:
         return
@@ -73,13 +70,11 @@ async def update_event_message(message_id):
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
-# Emoji-Validierung
 def is_valid_emoji(emoji, guild):
     if re.match(CUSTOM_EMOJI_REGEX, emoji):
         return any(str(e) == emoji for e in guild.emojis)
     return True
 
-# Bot-Start
 @bot.event
 async def on_ready():
     print(f"✅ Bot ist online als {bot.user}")
@@ -126,9 +121,6 @@ async def event(interaction: discord.Interaction,
                 stil: app_commands.Choice[str],
                 slots: str):
 
-    print(f"📨 /event Command aufgerufen von {interaction.user}")
-
-    # Sofort acken
     await interaction.response.defer(ephemeral=True)
 
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
@@ -160,7 +152,6 @@ async def event(interaction: discord.Interaction,
 
     header = (
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
-        f"👤 **Erstellt von:** {interaction.user.mention}\n\n"
         f"**Art:** {art.value}\n"
         f"**Zweck:** {zweck}\n"
         f"**Ort:** {ort}\n"
@@ -180,7 +171,6 @@ async def event(interaction: discord.Interaction,
             except discord.HTTPException:
                 await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
 
-        # Event speichern
         active_events[msg.id] = {
             "slots": slot_dict,
             "channel_id": interaction.channel.id,
@@ -190,28 +180,19 @@ async def event(interaction: discord.Interaction,
         }
 
     asyncio.create_task(add_reactions())
-
     await interaction.followup.send("✅ Event wurde erstellt!", ephemeral=True)
 
 # /event_delete Command
-@bot.tree.command(name="event_delete", description="Löscht dein Event.")
-async def event_delete(interaction: discord.Interaction, message_id: str):
-    try:
-        msg_id = int(message_id)
-    except ValueError:
-        await interaction.response.send_message("❌ Ungültige Nachricht-ID.", ephemeral=True)
+@bot.tree.command(name="event_delete", description="Löscht dein eigenes Event.")
+async def event_delete(interaction: discord.Interaction):
+    user_events = [msg_id for msg_id, data in active_events.items() if data["creator_id"] == interaction.user.id]
+
+    if not user_events:
+        await interaction.response.send_message("❌ Du hast keine aktiven Events zum Löschen.", ephemeral=True)
         return
 
-    if msg_id not in active_events:
-        await interaction.response.send_message("❌ Kein aktives Event mit dieser ID gefunden.", ephemeral=True)
-        return
-
+    msg_id = user_events[-1]  # löscht das zuletzt erstellte Event
     event = active_events[msg_id]
-
-    # Nur der Ersteller darf löschen
-    if interaction.user.id != event["creator_id"]:
-        await interaction.response.send_message("❌ Du darfst dieses Event nicht löschen.", ephemeral=True)
-        return
 
     guild = bot.get_guild(event["guild_id"])
     if not guild:
@@ -227,7 +208,7 @@ async def event_delete(interaction: discord.Interaction, message_id: str):
         msg = await channel.fetch_message(msg_id)
         await msg.delete()
         del active_events[msg_id]
-        await interaction.response.send_message("✅ Event wurde gelöscht.", ephemeral=True)
+        await interaction.response.send_message("✅ Dein Event wurde gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
@@ -286,8 +267,4 @@ async def start_bot():
         try:
             await bot.start(TOKEN)
         except Exception as e:
-            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    asyncio.run(start_bot())
+            print(f"
