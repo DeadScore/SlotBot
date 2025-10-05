@@ -37,6 +37,7 @@ def run():
 t = Thread(target=run)
 t.start()
 
+# Emoji normalisieren
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji
@@ -44,6 +45,7 @@ def normalize_emoji(emoji):
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
 
+# Formatierung der Event-Nachricht
 def format_event_text(event, guild):
     text = "📋 **Event-Teilnehmerübersicht** 📋\n"
     for emoji, slot in event["slots"].items():
@@ -54,6 +56,7 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
+# Event-Message aktualisieren
 async def update_event_message(message_id):
     if message_id not in active_events:
         return
@@ -70,11 +73,13 @@ async def update_event_message(message_id):
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
+# Emoji-Validierung
 def is_valid_emoji(emoji, guild):
     if re.match(CUSTOM_EMOJI_REGEX, emoji):
         return any(str(e) == emoji for e in guild.emojis)
     return True
 
+# Bot-Start
 @bot.event
 async def on_ready():
     print(f"✅ Bot ist online als {bot.user}")
@@ -121,12 +126,12 @@ async def event(interaction: discord.Interaction,
                 stil: app_commands.Choice[str],
                 slots: str):
 
-    await interaction.response.defer(ephemeral=True)
+    print(f"📨 /event Command aufgerufen von {interaction.user}")
 
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
     matches = slot_pattern.findall(slots)
     if not matches:
-        await interaction.followup.send(
+        await interaction.response.send_message(
             "❌ Keine gültigen Slots gefunden. Format: <:Tank:ID>:2 oder <:Tank:ID> : 2",
             ephemeral=True
         )
@@ -144,7 +149,7 @@ async def event(interaction: discord.Interaction,
             limit = int(normal_limit)
 
         if not is_valid_emoji(emoji, interaction.guild):
-            await interaction.followup.send(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
             return
 
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
@@ -162,55 +167,49 @@ async def event(interaction: discord.Interaction,
         f"Reagiert mit eurer Klasse:\n"
     )
 
+    await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n" + description)
 
-    async def add_reactions():
-        for emoji in slot_dict.keys():
-            try:
-                await msg.add_reaction(emoji)
-            except discord.HTTPException:
-                await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
+    # Emojis langsamer hinzufügen, um Rate-Limits zu vermeiden
+    for emoji in slot_dict.keys():
+        try:
+            await msg.add_reaction(emoji)
+            await asyncio.sleep(1)
+        except discord.HTTPException:
+            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
 
-        active_events[msg.id] = {
-            "slots": slot_dict,
-            "channel_id": interaction.channel.id,
-            "guild_id": interaction.guild.id,
-            "header": header,
-            "creator_id": interaction.user.id
-        }
+    active_events[msg.id] = {
+        "slots": slot_dict,
+        "channel_id": interaction.channel.id,
+        "guild_id": interaction.guild.id,
+        "header": header,
+        "creator_id": interaction.user.id
+    }
 
-    asyncio.create_task(add_reactions())
-    await interaction.followup.send("✅ Event wurde erstellt!", ephemeral=True)
-
-# /event_delete Command
+# /event_delete Command nur für Ersteller
 @bot.tree.command(name="event_delete", description="Löscht dein eigenes Event.")
 async def event_delete(interaction: discord.Interaction):
-    user_events = [msg_id for msg_id, data in active_events.items() if data["creator_id"] == interaction.user.id]
+    deleted = False
+    for msg_id, event in list(active_events.items()):
+        if event["creator_id"] == interaction.user.id:
+            guild = bot.get_guild(event["guild_id"])
+            if not guild:
+                continue
+            channel = guild.get_channel(event["channel_id"])
+            if not channel:
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+                del active_events[msg_id]
+                deleted = True
+            except:
+                continue
 
-    if not user_events:
-        await interaction.response.send_message("❌ Du hast keine aktiven Events zum Löschen.", ephemeral=True)
-        return
-
-    msg_id = user_events[-1]
-    event = active_events[msg_id]
-
-    guild = bot.get_guild(event["guild_id"])
-    if not guild:
-        await interaction.response.send_message("❌ Server nicht gefunden.", ephemeral=True)
-        return
-
-    channel = guild.get_channel(event["channel_id"])
-    if not channel:
-        await interaction.response.send_message("❌ Channel nicht gefunden.", ephemeral=True)
-        return
-
-    try:
-        msg = await channel.fetch_message(msg_id)
-        await msg.delete()
-        del active_events[msg_id]
+    if deleted:
         await interaction.response.send_message("✅ Dein Event wurde gelöscht.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Du hast aktuell kein Event, das du löschen könntest.", ephemeral=True)
 
 # Reaktionen verwalten
 @bot.event
@@ -219,7 +218,9 @@ async def on_raw_reaction_add(payload):
         return
     event = active_events[payload.message_id]
     emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"] or payload.user_id == bot.user.id:
+    if emoji not in event["slots"]:
+        return
+    if payload.user_id == bot.user.id:
         return
 
     guild = bot.get_guild(payload.guild_id)
