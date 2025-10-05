@@ -34,8 +34,7 @@ def run():
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
-t = Thread(target=run)
-t.start()
+Thread(target=run).start()
 
 # Emoji normalisieren
 def normalize_emoji(emoji):
@@ -45,9 +44,9 @@ def normalize_emoji(emoji):
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
 
-# Formatierung der Event-Nachricht
+# Event-Text formatieren
 def format_event_text(event, guild):
-    text = "📋 **Event-Teilnehmerübersicht** 📋\n"
+    text = "📋 **Teilnehmerübersicht** 📋\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
@@ -56,7 +55,7 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
-# Event-Message aktualisieren
+# Event-Message aktualisieren (mit Rate-Limit-Puffer)
 async def update_event_message(message_id):
     if message_id not in active_events:
         return
@@ -70,6 +69,7 @@ async def update_event_message(message_id):
     try:
         message = await channel.fetch_message(message_id)
         await message.edit(content=event["header"] + "\n" + format_event_text(event, guild))
+        await asyncio.sleep(0.25)  # kleine Pause, um 429 zu vermeiden
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
@@ -90,31 +90,25 @@ async def on_ready():
         print(f"❌ Fehler beim Sync: {e}")
 
 # /event Command
-@bot.tree.command(name="event", description="Erstellt ein Event mit Steckbrief und begrenzten Slots.")
+@bot.tree.command(name="event", description="Erstellt ein Event mit Slots.")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/RP)",
     zweck="Zweck (z. B. EP Farmen)",
-    ort="Ort (z. B. Higewayman Hills)",
-    zeit="Zeit (z. B. heute 19 Uhr)",
-    level="Levelbereich (z. B. 5–10)",
+    ort="Ort",
+    zeit="Zeit",
+    level="Levelbereich",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> :2)"
+    slots="Slot-Definitionen (z.B. <:Tank:ID>:2 oder <:Tank:ID> :2)"
 )
 @app_commands.choices(
-    art=[
-        app_commands.Choice(name="PvE", value="PvE"),
-        app_commands.Choice(name="PvP", value="PvP"),
-        app_commands.Choice(name="RP", value="RP")
-    ],
-    typ=[
-        app_commands.Choice(name="Gruppe", value="Gruppe"),
-        app_commands.Choice(name="Raid", value="Raid")
-    ],
-    stil=[
-        app_commands.Choice(name="Gemütlich", value="Gemütlich"),
-        app_commands.Choice(name="Organisiert", value="Organisiert")
-    ]
+    art=[app_commands.Choice(name="PvE", value="PvE"),
+         app_commands.Choice(name="PvP", value="PvP"),
+         app_commands.Choice(name="RP", value="RP")],
+    typ=[app_commands.Choice(name="Gruppe", value="Gruppe"),
+         app_commands.Choice(name="Raid", value="Raid")],
+    stil=[app_commands.Choice(name="Gemütlich", value="Gemütlich"),
+          app_commands.Choice(name="Organisiert", value="Organisiert")]
 )
 async def event(interaction: discord.Interaction,
                 art: app_commands.Choice[str],
@@ -131,22 +125,19 @@ async def event(interaction: discord.Interaction,
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
     matches = slot_pattern.findall(slots)
     if not matches:
-        await interaction.response.send_message(
-            "❌ Keine gültigen Slots gefunden. Format: <:Tank:ID>:2 oder <:Tank:ID> : 2",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Keine gültigen Slots gefunden.", ephemeral=True)
         return
 
     slot_dict = {}
-    description = "📋 **Event-Teilnehmerübersicht** 📋\n"
+    description = "📋 **Teilnehmerübersicht** 📋\n"
 
-    for custom_emoji, custom_limit, normal_emoji, normal_limit in matches:
-        if custom_emoji:
-            emoji = normalize_emoji(custom_emoji)
-            limit = int(custom_limit)
+    for c_emoji, c_limit, n_emoji, n_limit in matches:
+        if c_emoji:
+            emoji = normalize_emoji(c_emoji)
+            limit = int(c_limit)
         else:
-            emoji = normalize_emoji(normal_emoji)
-            limit = int(normal_limit)
+            emoji = normalize_emoji(n_emoji)
+            limit = int(n_limit)
 
         if not is_valid_emoji(emoji, interaction.guild):
             await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
@@ -167,16 +158,15 @@ async def event(interaction: discord.Interaction,
         f"Reagiert mit eurer Klasse:\n"
     )
 
-    await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
+    await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n" + description)
 
-    # Emojis langsamer hinzufügen, um Rate-Limits zu vermeiden
     for emoji in slot_dict.keys():
         try:
             await msg.add_reaction(emoji)
-            await asyncio.sleep(1)
-        except discord.HTTPException:
-            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}", ephemeral=True)
+            await asyncio.sleep(0.2)  # Pausen gegen Rate-Limits
+        except:
+            pass
 
     active_events[msg.id] = {
         "slots": slot_dict,
@@ -186,41 +176,37 @@ async def event(interaction: discord.Interaction,
         "creator_id": interaction.user.id
     }
 
-# /event_delete Command nur für Ersteller
-@bot.tree.command(name="event_delete", description="Löscht dein eigenes Event.")
+# /event_delete Command (löscht nur eigene Events)
+@bot.tree.command(name="event_delete", description="Löscht ein Event, das du erstellt hast.")
 async def event_delete(interaction: discord.Interaction):
-    deleted = False
-    for msg_id, event in list(active_events.items()):
-        if event["creator_id"] == interaction.user.id:
-            guild = bot.get_guild(event["guild_id"])
-            if not guild:
-                continue
-            channel = guild.get_channel(event["channel_id"])
-            if not channel:
-                continue
-            try:
-                msg = await channel.fetch_message(msg_id)
-                await msg.delete()
-                del active_events[msg_id]
-                deleted = True
-            except:
-                continue
+    found = None
+    for msg_id, event in active_events.items():
+        if event["creator_id"] == interaction.user.id and event["channel_id"] == interaction.channel.id:
+            found = msg_id
+            break
 
-    if deleted:
+    if not found:
+        await interaction.response.send_message("❌ Kein eigenes Event zum Löschen gefunden.", ephemeral=True)
+        return
+
+    event = active_events[found]
+    channel = bot.get_channel(event["channel_id"])
+    try:
+        msg = await channel.fetch_message(found)
+        await msg.delete()
+        del active_events[found]
         await interaction.response.send_message("✅ Dein Event wurde gelöscht.", ephemeral=True)
-    else:
-        await interaction.response.send_message("❌ Du hast aktuell kein Event, das du löschen könntest.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
 # Reaktionen verwalten
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.message_id not in active_events:
+    if payload.message_id not in active_events or payload.user_id == bot.user.id:
         return
     event = active_events[payload.message_id]
     emoji = normalize_emoji(payload.emoji)
     if emoji not in event["slots"]:
-        return
-    if payload.user_id == bot.user.id:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -262,14 +248,5 @@ async def on_raw_reaction_remove(payload):
 
     await update_event_message(payload.message_id)
 
-# Dauerbetrieb
-async def start_bot():
-    while True:
-        try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    asyncio.run(start_bot())
+# Bot starten
+bot.run(TOKEN)
