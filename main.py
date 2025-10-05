@@ -105,7 +105,7 @@ async def on_ready():
     art=[
         app_commands.Choice(name="PvE", value="PvE"),
         app_commands.Choice(name="PvP", value="PvP"),
-        app_commands.Choice(name="RP", value="RP")
+        app_commands.Choice(name="PVX", value="PVX")
     ],
     typ=[
         app_commands.Choice(name="Gruppe", value="Gruppe"),
@@ -166,14 +166,6 @@ async def event(interaction: discord.Interaction,
         f"**Typ:** {typ.value}\n"
         f"**Stil:** {stil.value}\n\n"
         f"Reagiert mit eurer Klasse:\n"
-        "<:Tank_Archetype:1345126746340458527> "
-        "<:Fighter_Archetype:1345126842637484083> "
-        "<:Rogue_Archetype:1345126778078892074> "
-        "<:Ranger_Archetype:1345126793257943050> "
-        "<:Mage_Archetype:1345126856348668036> "
-        "<:Summoner_Archetype:1345126764447269016> "
-        "<:Bard_Archetype:1345126811880912846> "
-        "<:Cleric_Archetype:1345126828280512683>\n"
     )
 
     await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
