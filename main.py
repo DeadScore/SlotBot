@@ -157,6 +157,7 @@ async def event(interaction: discord.Interaction,
 
     header = (
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
+        f"👤 **Erstellt von:** {interaction.user.mention}\n\n"
         f"**Art:** {art.value}\n"
         f"**Zweck:** {zweck}\n"
         f"**Ort:** {ort}\n"
