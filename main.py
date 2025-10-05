@@ -191,7 +191,7 @@ async def event_delete(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Du hast keine aktiven Events zum Löschen.", ephemeral=True)
         return
 
-    msg_id = user_events[-1]  # löscht das zuletzt erstellte Event
+    msg_id = user_events[-1]
     event = active_events[msg_id]
 
     guild = bot.get_guild(event["guild_id"])
@@ -267,4 +267,8 @@ async def start_bot():
         try:
             await bot.start(TOKEN)
         except Exception as e:
-            print(f"
+            print(f"❌ Bot abgestürzt: {e}, Neustart in 5 Sekunden...")
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(start_bot())
