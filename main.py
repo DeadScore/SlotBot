@@ -96,7 +96,8 @@ async def on_ready():
     art="Art des Events (PvE/PvP/RP)",
     zweck="Zweck (z. B. EP Farmen)",
     ort="Ort (z. B. Higewayman Hills)",
-    zeit="Zeit (z. B. heute 19 Uhr)",
+    zeit="Zeit (z. B. 19 Uhr)",
+    datum="Datum (z. B. heute)",
     level="Levelbereich (z. B. 5–10)",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
@@ -123,6 +124,7 @@ async def event(interaction: discord.Interaction,
                 zweck: str,
                 ort: str,
                 zeit: str,
+                datum: str,
                 level: str,
                 typ: app_commands.Choice[str],
                 stil: app_commands.Choice[str],
@@ -164,6 +166,7 @@ async def event(interaction: discord.Interaction,
         f"**Zweck:** {zweck}\n"
         f"**Ort:** {ort}\n"
         f"**Zeit:** {zeit}\n"
+        f"**Datum:** {datum}\n"
         f"**Levelbereich:** {level}\n"
         f"**Typ:** {typ.value}\n"
         f"**Stil:** {stil.value}\n"
