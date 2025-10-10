@@ -6,6 +6,7 @@ from threading import Thread
 import re
 import os
 import asyncio
+import json
 
 # Token aus Umgebungsvariable
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -21,9 +22,39 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Struktur: message_id -> slots, channel_id, guild_id, header, creator_id
 active_events = {}
 
+SAVE_FILE = "events.json"
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 
-# Flask Webserver für Render
+# === JSON Speicherfunktionen ===
+def load_events():
+    if os.path.exists(SAVE_FILE):
+        with open(SAVE_FILE, "r") as f:
+            try:
+                data = json.load(f)
+                # sets wiederherstellen
+                for ev in data.values():
+                    for slot in ev["slots"].values():
+                        slot["main"] = set(slot["main"])
+                print(f"📂 {len(data)} Events aus Datei geladen")
+                return data
+            except json.JSONDecodeError:
+                print("⚠️ Fehler beim Lesen der events.json, Datei wird ignoriert.")
+                return {}
+    return {}
+
+def save_events():
+    serializable = {}
+    for mid, ev in active_events.items():
+        copy = ev.copy()
+        # sets in Listen umwandeln
+        for slot in copy["slots"].values():
+            slot["main"] = list(slot["main"])
+        serializable[mid] = copy
+    with open(SAVE_FILE, "w") as f:
+        json.dump(serializable, f, indent=4)
+    print("💾 Events gespeichert")
+
+# === Flask Webserver für Render ===
 app = Flask('')
 
 @app.route('/')
@@ -37,7 +68,7 @@ def run():
 t = Thread(target=run)
 t.start()
 
-# Emoji normalisieren
+# === Emoji-Funktionen ===
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji.strip()
@@ -45,7 +76,12 @@ def normalize_emoji(emoji):
         return f"<:{emoji.name}:{emoji.id}>"
     return emoji.name
 
-# Formatierung der Event-Nachricht
+def is_valid_emoji(emoji, guild):
+    if re.match(CUSTOM_EMOJI_REGEX, emoji):
+        return any(str(e) == emoji for e in guild.emojis)
+    return True
+
+# === Textformatierung ===
 def format_event_text(event, guild):
     text = "📋 **Eventübersicht** 📋\n"
     for emoji, slot in event["slots"].items():
@@ -57,7 +93,7 @@ def format_event_text(event, guild):
     text += "\n"
     return text
 
-# Event-Message aktualisieren
+# === Event-Message aktualisieren ===
 async def update_event_message(message_id):
     if message_id not in active_events:
         return
@@ -69,28 +105,37 @@ async def update_event_message(message_id):
     if not channel:
         return
     try:
-        message = await channel.fetch_message(message_id)
+        message = await channel.fetch_message(int(message_id))
         await message.edit(content=event["header"] + "\n" + format_event_text(event, guild))
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
-# Emoji-Validierung
-def is_valid_emoji(emoji, guild):
-    if re.match(CUSTOM_EMOJI_REGEX, emoji):
-        return any(str(e) == emoji for e in guild.emojis)
-    return True
-
-# Bot-Start
+# === Bot-Start ===
 @bot.event
 async def on_ready():
+    global active_events
     print(f"✅ Bot ist online als {bot.user}")
+
+    # Alte Events laden
+    active_events = load_events()
+
+    # Wiederherstellen alter Nachrichten
+    for message_id, ev in list(active_events.items()):
+        try:
+            guild = bot.get_guild(ev["guild_id"])
+            channel = guild.get_channel(ev["channel_id"])
+            msg = await channel.fetch_message(int(message_id))
+            await msg.edit(content=ev["header"] + "\n" + format_event_text(ev, guild))
+        except Exception as e:
+            print(f"⚠️ Event {message_id} konnte nicht wiederhergestellt werden: {e}")
+
     try:
         synced = await bot.tree.sync()
         print(f"📂 Slash Commands global synchronisiert ({len(synced)})")
     except Exception as e:
         print(f"❌ Fehler beim Sync: {e}")
 
-# /event Command
+# === /event Command ===
 @bot.tree.command(name="event", description="Erstellt ein Event mit Steckbrief und begrenzten Slots.")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/RP)",
@@ -195,7 +240,9 @@ async def event(interaction: discord.Interaction,
         "creator_id": interaction.user.id
     }
 
-# /event_delete Command
+    save_events()  # 💾 direkt speichern
+
+# === /event_delete Command ===
 @bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
 async def event_delete(interaction: discord.Interaction):
     guild = interaction.guild
@@ -219,11 +266,12 @@ async def event_delete(interaction: discord.Interaction):
         msg = await channel.fetch_message(target_id)
         await msg.delete()
         del active_events[target_id]
+        save_events()  # 💾 speichern nach Löschen
         await interaction.response.send_message("✅ Event wurde gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
-# Reaktionen verwalten
+# === Reaktions-Handling ===
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.message_id not in active_events:
@@ -240,7 +288,7 @@ async def on_raw_reaction_add(payload):
     if not member:
         return
 
-    # Nur eine Reaktion pro User erlauben
+    # Nur eine Reaktion pro User
     for e in event["slots"].keys():
         if e != emoji:
             try:
@@ -259,6 +307,7 @@ async def on_raw_reaction_add(payload):
         slot["waitlist"].append(payload.user_id)
 
     await update_event_message(payload.message_id)
+    save_events()  # 💾 speichern nach Änderung
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -280,8 +329,9 @@ async def on_raw_reaction_remove(payload):
         slot["waitlist"].remove(user_id)
 
     await update_event_message(payload.message_id)
+    save_events()  # 💾 speichern nach Änderung
 
-# Dauerbetrieb
+# === Dauerbetrieb (Auto-Restart) ===
 async def start_bot():
     while True:
         try:
