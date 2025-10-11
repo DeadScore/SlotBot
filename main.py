@@ -31,10 +31,11 @@ def load_events():
         with open(SAVE_FILE, "r") as f:
             try:
                 data = json.load(f)
-                # sets wiederherstellen
+                # sets und wartelisten wiederherstellen
                 for ev in data.values():
                     for slot in ev["slots"].values():
-                        slot["main"] = set(slot["main"])
+                        slot["main"] = set(slot.get("main", []))
+                        slot["waitlist"] = list(slot.get("waitlist", []))
                 print(f"📂 {len(data)} Events aus Datei geladen")
                 return data
             except json.JSONDecodeError:
@@ -45,10 +46,9 @@ def load_events():
 def save_events():
     serializable = {}
     for mid, ev in active_events.items():
-        copy = ev.copy()
-        # sets in Listen umwandeln
-        for slot in copy["slots"].values():
-            slot["main"] = list(slot["main"])
+        copy = json.loads(json.dumps(ev))  # tiefe Kopie ohne Referenzen
+        for slot_key, slot in ev["slots"].items():
+            copy["slots"][slot_key]["main"] = list(slot["main"])
         serializable[mid] = copy
     with open(SAVE_FILE, "w") as f:
         json.dump(serializable, f, indent=4)
@@ -140,7 +140,7 @@ async def on_ready():
 @app_commands.describe(
     art="Art des Events (PvE/PvP/RP)",
     zweck="Zweck (z. B. EP Farmen)",
-    ort="Ort (z. B. Higewayman Hills)",
+    ort="Ort (z. B. Highwayman Hills)",
     zeit="Zeit (z. B. 19 Uhr)",
     datum="Datum (z. B. heute)",
     level="Levelbereich (z. B. 5–10)",
@@ -298,8 +298,13 @@ async def on_raw_reaction_add(payload):
                 pass
 
     slot = event["slots"][emoji]
+
+    # Doppelte Einträge vermeiden
     if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
         return
+    for s in event["slots"].values():
+        if payload.user_id in s["main"] or payload.user_id in s["waitlist"]:
+            return
 
     if len(slot["main"]) < slot["limit"]:
         slot["main"].add(payload.user_id)
@@ -320,6 +325,9 @@ async def on_raw_reaction_remove(payload):
 
     slot = event["slots"][emoji]
     user_id = payload.user_id
+
+    print(f"🧹 {user_id} hat Reaktion {emoji} entfernt")
+
     if user_id in slot["main"]:
         slot["main"].remove(user_id)
         if slot["waitlist"]:
