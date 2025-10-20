@@ -8,9 +8,10 @@ import os
 import asyncio
 import json
 
-# Token aus Umgebungsvariable
+# === Token ===
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# === Intents ===
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -19,9 +20,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Struktur: message_id -> slots, channel_id, guild_id, header, creator_id
+# === Globale Variablen ===
 active_events = {}
-
 SAVE_FILE = "events.json"
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 
@@ -31,13 +31,15 @@ def load_events():
         with open(SAVE_FILE, "r") as f:
             try:
                 data = json.load(f)
-                # sets und wartelisten wiederherstellen
-                for ev in data.values():
+                new_data = {}
+                for mid_str, ev in data.items():
+                    mid = int(mid_str)  # 👈 Fix: IDs wieder zu int casten
                     for slot in ev["slots"].values():
                         slot["main"] = set(slot.get("main", []))
                         slot["waitlist"] = list(slot.get("waitlist", []))
-                print(f"📂 {len(data)} Events aus Datei geladen")
-                return data
+                    new_data[mid] = ev
+                print(f"📂 {len(new_data)} Events aus Datei geladen")
+                return new_data
             except json.JSONDecodeError:
                 print("⚠️ Fehler beim Lesen der events.json, Datei wird ignoriert.")
                 return {}
@@ -49,7 +51,7 @@ def save_events():
         copy = json.loads(json.dumps(ev))  # tiefe Kopie ohne Referenzen
         for slot_key, slot in ev["slots"].items():
             copy["slots"][slot_key]["main"] = list(slot["main"])
-        serializable[mid] = copy
+        serializable[str(mid)] = copy  # 👈 fix: beim Speichern als String
     with open(SAVE_FILE, "w") as f:
         json.dump(serializable, f, indent=4)
     print("💾 Events gespeichert")
@@ -115,8 +117,6 @@ async def update_event_message(message_id):
 async def on_ready():
     global active_events
     print(f"✅ Bot ist online als {bot.user}")
-
-    # Alte Events laden
     active_events = load_events()
 
     # Wiederherstellen alter Nachrichten
@@ -146,8 +146,9 @@ async def on_ready():
     level="Levelbereich (z. B. 5–10)",
     typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
-    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> :2)",
-    gruppenlead="(Optional) Name oder Mention des Gruppenleiters"
+    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> : 2)",
+    gruppenlead="(Optional) Name oder Mention des Gruppenleiters",
+    anmerkung="(Optional) Freitext-Anmerkung zum Event"  # 👈 neu
 )
 @app_commands.choices(
     art=[
@@ -164,17 +165,20 @@ async def on_ready():
         app_commands.Choice(name="Organisiert", value="Organisiert")
     ]
 )
-async def event(interaction: discord.Interaction,
-                art: app_commands.Choice[str],
-                zweck: str,
-                ort: str,
-                zeit: str,
-                datum: str,
-                level: str,
-                typ: app_commands.Choice[str],
-                stil: app_commands.Choice[str],
-                slots: str,
-                gruppenlead: str = None):
+async def event(
+    interaction: discord.Interaction,
+    art: app_commands.Choice[str],
+    zweck: str,
+    ort: str,
+    zeit: str,
+    datum: str,
+    level: str,
+    typ: app_commands.Choice[str],
+    stil: app_commands.Choice[str],
+    slots: str,
+    gruppenlead: str = None,
+    anmerkung: str = None  # 👈 neu
+):
 
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
@@ -205,7 +209,9 @@ async def event(interaction: discord.Interaction,
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
         description += f"{emoji} (0/{limit}): -\n"
 
+    # === Header + Anmerkung + @here
     header = (
+        f"@here\n"  # 👈 Ping
         f"‼️ **Neue Gruppensuche!** ‼️\n\n"
         f"**Art:** {art.value}\n"
         f"**Zweck:** {zweck}\n"
@@ -219,6 +225,9 @@ async def event(interaction: discord.Interaction,
 
     if gruppenlead:
         header += f"**Gruppenlead:** {gruppenlead}\n"
+
+    if anmerkung:
+        header += f"📝 **Anmerkung:** {anmerkung}\n"
 
     header += "\nReagiert mit eurer Klasse:\n"
 
@@ -240,7 +249,7 @@ async def event(interaction: discord.Interaction,
         "creator_id": interaction.user.id
     }
 
-    save_events()  # 💾 direkt speichern
+    save_events()
 
 # === /event_delete Command ===
 @bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
@@ -266,7 +275,7 @@ async def event_delete(interaction: discord.Interaction):
         msg = await channel.fetch_message(target_id)
         await msg.delete()
         del active_events[target_id]
-        save_events()  # 💾 speichern nach Löschen
+        save_events()
         await interaction.response.send_message("✅ Event wurde gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
@@ -312,7 +321,7 @@ async def on_raw_reaction_add(payload):
         slot["waitlist"].append(payload.user_id)
 
     await update_event_message(payload.message_id)
-    save_events()  # 💾 speichern nach Änderung
+    save_events()
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -326,8 +335,6 @@ async def on_raw_reaction_remove(payload):
     slot = event["slots"][emoji]
     user_id = payload.user_id
 
-    print(f"🧹 {user_id} hat Reaktion {emoji} entfernt")
-
     if user_id in slot["main"]:
         slot["main"].remove(user_id)
         if slot["waitlist"]:
@@ -337,7 +344,7 @@ async def on_raw_reaction_remove(payload):
         slot["waitlist"].remove(user_id)
 
     await update_event_message(payload.message_id)
-    save_events()  # 💾 speichern nach Änderung
+    save_events()
 
 # === Dauerbetrieb (Auto-Restart) ===
 async def start_bot():
