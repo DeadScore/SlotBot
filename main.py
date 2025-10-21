@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from flask import Flask
 from threading import Thread
@@ -7,6 +7,7 @@ import re
 import os
 import asyncio
 import json
+from datetime import datetime, timedelta
 
 # === Token ===
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -37,6 +38,7 @@ def load_events():
                     for slot in ev["slots"].values():
                         slot["main"] = set(slot.get("main", []))
                         slot["waitlist"] = list(slot.get("waitlist", []))
+                        slot["reminded"] = set(slot.get("reminded", []))
                     new_data[mid] = ev
                 print(f"📂 {len(new_data)} Events aus Datei geladen")
                 return new_data
@@ -51,6 +53,7 @@ def save_events():
         copy = json.loads(json.dumps(ev))
         for slot_key, slot in ev["slots"].items():
             copy["slots"][slot_key]["main"] = list(slot["main"])
+            copy["slots"][slot_key]["reminded"] = list(slot.get("reminded", []))
         serializable[str(mid)] = copy
     with open(SAVE_FILE, "w") as f:
         json.dump(serializable, f, indent=4)
@@ -63,11 +66,7 @@ app = Flask('')
 def home():
     return "✅ Bot läuft und ist wach!"
 
-def run():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
-Thread(target=run).start()
+Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
 
 # === Emoji & Formatierungsfunktionen ===
 def normalize_emoji(emoji):
@@ -108,10 +107,39 @@ async def update_event_message(message_id):
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
+# === Reminder Task ===
+async def reminder_task():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.utcnow()
+        for msg_id, ev in list(active_events.items()):
+            guild = bot.get_guild(ev["guild_id"])
+            if not guild:
+                continue
+            for emoji, slot in ev["slots"].items():
+                if "reminded" not in slot:
+                    slot["reminded"] = set()
+                for user_id in slot["main"]:
+                    member = guild.get_member(user_id)
+                    if not member:
+                        continue
+                    if user_id in slot["reminded"]:
+                        continue
+                    try:
+                        event_time = ev.get("event_time")
+                        if event_time:
+                            if 0 <= (event_time - now).total_seconds() <= 600:  # 10 Minuten vorher
+                                await member.send(f"⏰ Dein Event **{ev['header'].splitlines()[1]}** startet in 10 Minuten!")
+                                slot["reminded"].add(user_id)
+                    except Exception as e:
+                        print(f"❌ Konnte DM an {member} nicht senden: {e}")
+        await asyncio.sleep(60)
+
 # === Bot Start ===
 @bot.event
 async def on_ready():
     global active_events
+    bot.loop.create_task(reminder_task())
     print(f"✅ Bot ist online als {bot.user}")
     active_events = load_events()
 
@@ -136,8 +164,8 @@ async def on_ready():
     art="Art des Events (PvE/PvP/RP)",
     zweck="Zweck (z. B. EP Farmen)",
     ort="Ort (z. B. Highwayman Hills)",
-    zeit="Zeit (z. B. 19 Uhr)",
-    datum="Datum (z. B. heute)",
+    zeit="Zeit (z. B. 19:00)",
+    datum="Datum (z. B. 21.10.2025)",
     level="Levelbereich (z. B. 5–10)",
     stil="Gemütlich oder Organisiert",
     slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> : 2)",
@@ -176,6 +204,18 @@ async def event(
 ):
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
+    # === Datum/Zeit validieren (DD.MM.YYYY HH:MM) ===
+    try:
+        event_datetime = datetime.strptime(f"{datum} {zeit}", "%d.%m.%Y %H:%M")
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ Ungültiges Datum oder Zeitformat.\n"
+            "Datum muss im Format `DD.MM.YYYY`, Zeit im Format `HH:MM` (24h) sein.",
+            ephemeral=True
+        )
+        return
+
+    # === Slots verarbeiten ===
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
     matches = slot_pattern.findall(slots)
     if not matches:
@@ -200,10 +240,10 @@ async def event(
             await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
             return
 
-        slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
+        slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": [], "reminded": set()}
         description += f"{emoji} (0/{limit}): -\n"
 
-    # === Moderner, rahmenloser Header ===
+    # === Header bauen ===
     lines = [
         "@here",
         "🌟 **Neues Event gestartet!** 🌟",
@@ -237,12 +277,21 @@ async def event(
             await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
             return
 
+    # Auto-Thread
+    try:
+        thread_name = f"Event: {ort} {datum} {zeit}"
+        thread = await msg.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
+        print(f"🧵 Thread erstellt: {thread.name}")
+    except Exception as e:
+        print(f"❌ Konnte Thread nicht erstellen: {e}")
+
     active_events[msg.id] = {
         "slots": slot_dict,
         "channel_id": interaction.channel.id,
         "guild_id": interaction.guild.id,
         "header": header,
-        "creator_id": interaction.user.id
+        "creator_id": interaction.user.id,
+        "event_time": event_datetime
     }
 
     save_events()
@@ -259,13 +308,13 @@ async def event_delete(interaction: discord.Interaction):
         return
 
     if interaction.user.guild_permissions.manage_messages:
-        target_id, _ = max(channel_events, key=lambda x: x[0])
+        target_id, target_event = max(channel_events, key=lambda x: x[0])
     else:
         own_events = [(mid, ev) for mid, ev in channel_events if ev["creator_id"] == interaction.user.id]
         if not own_events:
             await interaction.response.send_message("❌ Du hast hier kein Event erstellt.", ephemeral=True)
             return
-        target_id, _ = max(own_events, key=lambda x: x[0])
+        target_id, target_event = max(own_events, key=lambda x: x[0])
 
     try:
         msg = await channel.fetch_message(target_id)
@@ -276,14 +325,14 @@ async def event_delete(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
-# === Reaction Handling ===
+# === Reaktions-Handling ===
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.message_id not in active_events:
+    if payload.message_id not in active_events or payload.user_id == bot.user.id:
         return
     event = active_events[payload.message_id]
     emoji = normalize_emoji(payload.emoji)
-    if emoji not in event["slots"] or payload.user_id == bot.user.id:
+    if emoji not in event["slots"]:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -293,15 +342,18 @@ async def on_raw_reaction_add(payload):
     if not member:
         return
 
+    # Nur eine Reaktion pro User
     for e in event["slots"].keys():
         if e != emoji:
             try:
-                msg = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
-                await msg.remove_reaction(e, member)
+                message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
+                await message.remove_reaction(e, member)
             except Exception:
                 pass
 
     slot = event["slots"][emoji]
+
+    # Doppelte Einträge vermeiden
     if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
         return
     for s in event["slots"].values():
@@ -312,6 +364,10 @@ async def on_raw_reaction_add(payload):
         slot["main"].add(payload.user_id)
     else:
         slot["waitlist"].append(payload.user_id)
+        try:
+            await member.send(f"📌 Du wurdest auf die Warteliste für Event **{event['header'].splitlines()[1]}** gesetzt.")
+        except Exception:
+            pass
 
     await update_event_message(payload.message_id)
     save_events()
@@ -326,15 +382,21 @@ async def on_raw_reaction_remove(payload):
         return
 
     slot = event["slots"][emoji]
-    uid = payload.user_id
+    user_id = payload.user_id
 
-    if uid in slot["main"]:
-        slot["main"].remove(uid)
+    if user_id in slot["main"]:
+        slot["main"].remove(user_id)
         if slot["waitlist"]:
             next_user = slot["waitlist"].pop(0)
             slot["main"].add(next_user)
-    elif uid in slot["waitlist"]:
-        slot["waitlist"].remove(uid)
+            try:
+                member = bot.get_guild(event["guild_id"]).get_member(next_user)
+                if member:
+                    await member.send(f"✅ Du bist von der Warteliste nachgerückt für Event **{event['header'].splitlines()[1]}**!")
+            except Exception:
+                pass
+    elif user_id in slot["waitlist"]:
+        slot["waitlist"].remove(user_id)
 
     await update_event_message(payload.message_id)
     save_events()
