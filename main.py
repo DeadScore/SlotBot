@@ -170,7 +170,144 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Fehler beim Sync: {e}")
 
-# === /event_delete mit Thread-Löschung ===
+# === /event Command ===
+@bot.tree.command(name="event", description="Erstellt ein Event mit Steckbrief und begrenzten Slots.")
+@app_commands.describe(
+    art="Art des Events (PvE/PvP/RP)",
+    zweck="Zweck (z. B. EP Farmen)",
+    ort="Ort (z. B. Highwayman Hills)",
+    zeit="Zeit im Format HH:MM (24h)",
+    datum="Datum im Format DD.MM.YYYY",
+    level="Levelbereich (z. B. 5–10)",
+    stil="Gemütlich oder Organisiert",
+    slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> : 2)",
+    typ="(Optional) Gruppe oder Raid",
+    gruppenlead="(Optional) Name oder Mention des Gruppenleiters",
+    anmerkung="(Optional) Freitext-Anmerkung zum Event"
+)
+@app_commands.choices(
+    art=[
+        app_commands.Choice(name="PvE", value="PvE"),
+        app_commands.Choice(name="PvP", value="PvP"),
+        app_commands.Choice(name="PVX", value="PVX")
+    ],
+    typ=[
+        app_commands.Choice(name="Gruppe", value="Gruppe"),
+        app_commands.Choice(name="Raid", value="Raid")
+    ],
+    stil=[
+        app_commands.Choice(name="Gemütlich", value="Gemütlich"),
+        app_commands.Choice(name="Organisiert", value="Organisiert")
+    ]
+)
+async def event(
+    interaction: discord.Interaction,
+    art: app_commands.Choice[str],
+    zweck: str,
+    ort: str,
+    zeit: str,
+    datum: str,
+    level: str,
+    stil: app_commands.Choice[str],
+    slots: str,
+    typ: app_commands.Choice[str] = None,
+    gruppenlead: str = None,
+    anmerkung: str = None
+):
+    # --- Datum/Zeit validieren ---
+    try:
+        event_datetime = datetime.strptime(f"{datum} {zeit}", "%d.%m.%Y %H:%M")
+        if event_datetime < datetime.utcnow():
+            await interaction.response.send_message("❌ Datum/Zeit liegt in der Vergangenheit!", ephemeral=True)
+            return
+    except ValueError:
+        await interaction.response.send_message("❌ Ungültiges Datum/Zeit-Format! Nutze DD.MM.YYYY HH:MM", ephemeral=True)
+        return
+
+    # --- Slot Parsing ---
+    slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
+    matches = slot_pattern.findall(slots)
+    if not matches:
+        await interaction.response.send_message(
+            "❌ Keine gültigen Slots gefunden. Format: <:Tank:ID>:2 oder <:Tank:ID> : 2",
+            ephemeral=True
+        )
+        return
+
+    slot_dict = {}
+    description = ""
+    for custom_emoji, custom_limit, normal_emoji, normal_limit in matches:
+        if custom_emoji:
+            emoji = normalize_emoji(custom_emoji)
+            limit = int(custom_limit)
+        else:
+            emoji = normalize_emoji(normal_emoji)
+            limit = int(normal_limit)
+
+        if not is_valid_emoji(emoji, interaction.guild):
+            await interaction.response.send_message(f"❌ Ungültiges Emoji: {emoji}", ephemeral=True)
+            return
+
+        slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": [], "reminded": set()}
+        description += f"{emoji} (0/{limit}): -\n"
+
+    # --- Header bauen ---
+    header = f"📣 @here\n‼️ **Neue Gruppensuche!** ‼️\n\n" \
+             f"**Art:** {art.value}\n" \
+             f"**Zweck:** {zweck}\n" \
+             f"**Ort:** {ort}\n" \
+             f"**Datum/Zeit:** {datum} {zeit} UTC\n" \
+             f"**Levelbereich:** {level}\n" \
+             f"**Stil:** {stil.value}\n"
+
+    if typ:
+        header += f"**Typ:** {typ.value}\n"
+    if gruppenlead:
+        header += f"**Gruppenlead:** {gruppenlead}\n"
+    if anmerkung:
+        header += f"**Anmerkung:** {anmerkung}\n"
+
+    header += "\nReagiert mit eurer Klasse:\n"
+
+    # --- Event posten ---
+    await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
+    msg = await interaction.channel.send(header + "\n" + description)
+
+    # --- Reaktionen hinzufügen ---
+    for emoji in slot_dict.keys():
+        try:
+            await msg.add_reaction(emoji)
+        except discord.HTTPException:
+            await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
+
+    # --- Thread erstellen ---
+    await asyncio.sleep(1)
+    thread = None
+    try:
+        thread_name = f"Event-Log: {ort} {datum} {zeit}"
+        thread = await msg.create_thread(
+            name=thread_name,
+            type=discord.ChannelType.public_thread
+        )
+        print(f"🧵 Thread erfolgreich erstellt: {thread.name}")
+    except discord.Forbidden:
+        print("❌ Bot hat keine Berechtigung, Threads zu erstellen.")
+    except discord.HTTPException as e:
+        print(f"❌ Fehler beim Erstellen des Threads: {e}")
+
+    # --- Event speichern ---
+    active_events[msg.id] = {
+        "slots": slot_dict,
+        "channel_id": interaction.channel.id,
+        "guild_id": interaction.guild.id,
+        "header": header,
+        "creator_id": interaction.user.id,
+        "event_time": event_datetime,
+        "thread_id": thread.id if thread else None
+    }
+    save_events()
+
+# === /event_delete Command mit Thread-Löschung ===
 @bot.tree.command(name="event_delete", description="Löscht dein letztes erstelltes Event oder als Admin jedes Event im Channel.")
 async def event_delete(interaction: discord.Interaction):
     guild = interaction.guild
@@ -210,6 +347,90 @@ async def event_delete(interaction: discord.Interaction):
         await interaction.response.send_message("✅ Event und zugehöriger Thread wurden gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
+
+# === Reaction Handling ===
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.user_id == bot.user.id:
+        return
+
+    if payload.message_id not in active_events:
+        return
+    event = active_events[payload.message_id]
+    emoji = normalize_emoji(payload.emoji)
+    if emoji not in event["slots"]:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    member = guild.get_member(payload.user_id)
+    if not member:
+        return
+
+    # Nur eine Reaktion pro User
+    for e in event["slots"].keys():
+        if e != emoji:
+            try:
+                message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
+                await message.remove_reaction(e, member)
+            except Exception:
+                pass
+
+    slot = event["slots"][emoji]
+
+    # Doppelte Einträge vermeiden
+    already_in_any = any(payload.user_id in s["main"] or payload.user_id in s["waitlist"] for s in event["slots"].values())
+    if already_in_any:
+        return
+
+    # Slot füllen oder Warteliste
+    if len(slot["main"]) < slot["limit"]:
+        slot["main"].add(payload.user_id)
+        await log_in_thread(event, payload.message_id, f"✅ {member.mention} hat Slot {emoji} besetzt")
+    else:
+        slot["waitlist"].append(payload.user_id)
+        await log_in_thread(event, payload.message_id, f"⏳ {member.mention} wurde auf die Warteliste {emoji} gesetzt")
+
+    await update_event_message(payload.message_id)
+    save_events()
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if payload.message_id not in active_events:
+        return
+    event = active_events[payload.message_id]
+    emoji = normalize_emoji(payload.emoji)
+    if emoji not in event["slots"]:
+        return
+
+    slot = event["slots"][emoji]
+    user_id = payload.user_id
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    member = guild.get_member(user_id)
+
+    if user_id in slot["main"]:
+        slot["main"].remove(user_id)
+        await log_in_thread(event, payload.message_id, f"❌ {member.mention} hat Slot {emoji} freigegeben")
+
+        # Warteliste nachrücken
+        if slot["waitlist"]:
+            next_user = slot["waitlist"].pop(0)
+            slot["main"].add(next_user)
+            next_member = guild.get_member(next_user)
+            await log_in_thread(event, payload.message_id, f"➡️ {next_member.mention} ist von der Warteliste nachgerückt")
+            try:
+                await next_member.send(f"🎉 Du bist von der Warteliste für **{event['header'].splitlines()[1]}** nachgerückt!")
+            except Exception:
+                pass
+    elif user_id in slot["waitlist"]:
+        slot["waitlist"].remove(user_id)
+        await log_in_thread(event, payload.message_id, f"❌ {member.mention} wurde von der Warteliste entfernt")
+
+    await update_event_message(payload.message_id)
+    save_events()
 
 # === Dauerbetrieb ===
 async def start_bot():
