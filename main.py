@@ -133,7 +133,10 @@ async def reminder_task():
                 for user_id in slot["main"]:
                     member = guild.get_member(user_id)
                     if not member:
-                        continue
+                        try:
+                            member = await guild.fetch_member(user_id)
+                        except:
+                            continue
                     if user_id in slot["reminded"]:
                         continue
                     try:
@@ -280,10 +283,11 @@ async def event(
         except discord.HTTPException:
             await interaction.followup.send(f"❌ Fehler beim Hinzufügen von {emoji}")
 
-    # --- Thread erstellen ---
-    await asyncio.sleep(1)
+    # --- Thread erstellen zuverlässig ---
     thread = None
     try:
+        # Nachricht nochmal sicher fetchen
+        msg = await interaction.channel.fetch_message(msg.id)
         thread_name = f"Event-Log: {ort} {datum} {zeit}"
         thread = await msg.create_thread(
             name=thread_name,
@@ -366,7 +370,10 @@ async def on_raw_reaction_add(payload):
         return
     member = guild.get_member(payload.user_id)
     if not member:
-        return
+        try:
+            member = await guild.fetch_member(payload.user_id)
+        except discord.NotFound:
+            return
 
     # Nur eine Reaktion pro User
     for e in event["slots"].keys():
@@ -410,24 +417,31 @@ async def on_raw_reaction_remove(payload):
     if not guild:
         return
     member = guild.get_member(user_id)
+    if not member:
+        try:
+            member = await guild.fetch_member(user_id)
+        except:
+            member = None
 
     if user_id in slot["main"]:
         slot["main"].remove(user_id)
-        await log_in_thread(event, payload.message_id, f"❌ {member.mention} hat Slot {emoji} freigegeben")
+        if member:
+            await log_in_thread(event, payload.message_id, f"❌ {member.mention} hat Slot {emoji} freigegeben")
 
         # Warteliste nachrücken
         if slot["waitlist"]:
             next_user = slot["waitlist"].pop(0)
             slot["main"].add(next_user)
-            next_member = guild.get_member(next_user)
-            await log_in_thread(event, payload.message_id, f"➡️ {next_member.mention} ist von der Warteliste nachgerückt")
             try:
+                next_member = await guild.fetch_member(next_user)
+                await log_in_thread(event, payload.message_id, f"➡️ {next_member.mention} ist von der Warteliste nachgerückt")
                 await next_member.send(f"🎉 Du bist von der Warteliste für **{event['header'].splitlines()[1]}** nachgerückt!")
-            except Exception:
+            except:
                 pass
     elif user_id in slot["waitlist"]:
         slot["waitlist"].remove(user_id)
-        await log_in_thread(event, payload.message_id, f"❌ {member.mention} wurde von der Warteliste entfernt")
+        if member:
+            await log_in_thread(event, payload.message_id, f"❌ {member.mention} wurde von der Warteliste entfernt")
 
     await update_event_message(payload.message_id)
     save_events()
