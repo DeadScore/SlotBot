@@ -33,7 +33,7 @@ def load_events():
                 data = json.load(f)
                 new_data = {}
                 for mid_str, ev in data.items():
-                    mid = int(mid_str)  # 👈 Fix: IDs wieder zu int casten
+                    mid = int(mid_str)
                     for slot in ev["slots"].values():
                         slot["main"] = set(slot.get("main", []))
                         slot["waitlist"] = list(slot.get("waitlist", []))
@@ -48,15 +48,15 @@ def load_events():
 def save_events():
     serializable = {}
     for mid, ev in active_events.items():
-        copy = json.loads(json.dumps(ev))  # tiefe Kopie ohne Referenzen
+        copy = json.loads(json.dumps(ev))
         for slot_key, slot in ev["slots"].items():
             copy["slots"][slot_key]["main"] = list(slot["main"])
-        serializable[str(mid)] = copy  # 👈 fix: beim Speichern als String
+        serializable[str(mid)] = copy
     with open(SAVE_FILE, "w") as f:
         json.dump(serializable, f, indent=4)
     print("💾 Events gespeichert")
 
-# === Flask Webserver für Render ===
+# === Flask Webserver (für Render-Uptime) ===
 app = Flask('')
 
 @app.route('/')
@@ -67,10 +67,9 @@ def run():
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
-t = Thread(target=run)
-t.start()
+Thread(target=run).start()
 
-# === Emoji-Funktionen ===
+# === Emoji & Formatierungsfunktionen ===
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji.strip()
@@ -83,19 +82,16 @@ def is_valid_emoji(emoji, guild):
         return any(str(e) == emoji for e in guild.emojis)
     return True
 
-# === Textformatierung ===
 def format_event_text(event, guild):
-    text = "📋 **Eventübersicht** 📋\n"
+    text = "📋 **Eventübersicht:**\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
         text += f"\n{emoji} ({len(main_users)}/{slot['limit']}): " + (", ".join(main_users) if main_users else "-")
         if wait_users:
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
-    text += "\n"
-    return text
+    return text + "\n"
 
-# === Event-Message aktualisieren ===
 async def update_event_message(message_id):
     if message_id not in active_events:
         return
@@ -108,24 +104,23 @@ async def update_event_message(message_id):
         return
     try:
         message = await channel.fetch_message(int(message_id))
-        await message.edit(content=event["header"] + "\n" + format_event_text(event, guild))
+        await message.edit(content=event["header"] + "\n\n" + format_event_text(event, guild))
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
-# === Bot-Start ===
+# === Bot Start ===
 @bot.event
 async def on_ready():
     global active_events
     print(f"✅ Bot ist online als {bot.user}")
     active_events = load_events()
 
-    # Wiederherstellen alter Nachrichten
     for message_id, ev in list(active_events.items()):
         try:
             guild = bot.get_guild(ev["guild_id"])
             channel = guild.get_channel(ev["channel_id"])
             msg = await channel.fetch_message(int(message_id))
-            await msg.edit(content=ev["header"] + "\n" + format_event_text(ev, guild))
+            await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
         except Exception as e:
             print(f"⚠️ Event {message_id} konnte nicht wiederhergestellt werden: {e}")
 
@@ -144,11 +139,11 @@ async def on_ready():
     zeit="Zeit (z. B. 19 Uhr)",
     datum="Datum (z. B. heute)",
     level="Levelbereich (z. B. 5–10)",
-    typ="Gruppe oder Raid",
     stil="Gemütlich oder Organisiert",
     slots="Slot-Definitionen (z. B. <:Tank:ID>:2 oder <:Tank:ID> : 2)",
+    typ="(Optional) Gruppe oder Raid",
     gruppenlead="(Optional) Name oder Mention des Gruppenleiters",
-    anmerkung="(Optional) Freitext-Anmerkung zum Event"  # 👈 neu
+    anmerkung="(Optional) Freitext-Anmerkung zum Event"
 )
 @app_commands.choices(
     art=[
@@ -173,13 +168,12 @@ async def event(
     zeit: str,
     datum: str,
     level: str,
-    typ: app_commands.Choice[str],
     stil: app_commands.Choice[str],
     slots: str,
+    typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
-    anmerkung: str = None  # 👈 neu
+    anmerkung: str = None
 ):
-
     print(f"📨 /event Command aufgerufen von {interaction.user}")
 
     slot_pattern = re.compile(r"(<a?:\w+:\d+>)\s*:\s*(\d+)|(\S+)\s*:\s*(\d+)")
@@ -192,7 +186,7 @@ async def event(
         return
 
     slot_dict = {}
-    description = "📋 **Eventübersicht** 📋\n"
+    description = "📋 **Eventübersicht:**\n"
 
     for custom_emoji, custom_limit, normal_emoji, normal_limit in matches:
         if custom_emoji:
@@ -209,30 +203,32 @@ async def event(
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": []}
         description += f"{emoji} (0/{limit}): -\n"
 
-    # === Header + Anmerkung + @here
-    header = (
-        f"@here\n"  # 👈 Ping
-        f"‼️ **Neue Gruppensuche!** ‼️\n\n"
-        f"**Art:** {art.value}\n"
-        f"**Zweck:** {zweck}\n"
-        f"**Ort:** {ort}\n"
-        f"**Zeit:** {zeit}\n"
-        f"**Datum:** {datum}\n"
-        f"**Levelbereich:** {level}\n"
-        f"**Typ:** {typ.value}\n"
-        f"**Stil:** {stil.value}\n"
-    )
+    # === Moderner, rahmenloser Header ===
+    lines = [
+        "@here",
+        "🌟 **Neues Event gestartet!** 🌟",
+        "",
+        f"🗺️ **Art:** {art.value}",
+        f"⚔️ **Zweck:** {zweck}",
+        f"📍 **Ort:** {ort}",
+        f"🕒 **Zeit:** {zeit} | 📅 **Datum:** {datum}",
+        f"🎚️ **Level:** {level}",
+    ]
+
+    if typ:
+        lines.append(f"👥 **Typ:** {typ.value}")
+    lines.append(f"🏕️ **Stil:** {stil.value}")
 
     if gruppenlead:
-        header += f"**Gruppenlead:** {gruppenlead}\n"
+        lines.append(f"👑 **Gruppenlead:** {gruppenlead}")
 
     if anmerkung:
-        header += f"📝 **Anmerkung:** {anmerkung}\n"
+        lines.append(f"📝 **Anmerkung:** {anmerkung}")
 
-    header += "\nReagiert mit eurer Klasse:\n"
+    header = "\n".join(lines)
 
     await interaction.response.send_message("✅ Event wurde erstellt!", ephemeral=True)
-    msg = await interaction.channel.send(header + "\n" + description)
+    msg = await interaction.channel.send(header + "\n\n" + description)
 
     for emoji in slot_dict.keys():
         try:
@@ -263,13 +259,13 @@ async def event_delete(interaction: discord.Interaction):
         return
 
     if interaction.user.guild_permissions.manage_messages:
-        target_id, target_event = max(channel_events, key=lambda x: x[0])
+        target_id, _ = max(channel_events, key=lambda x: x[0])
     else:
         own_events = [(mid, ev) for mid, ev in channel_events if ev["creator_id"] == interaction.user.id]
         if not own_events:
             await interaction.response.send_message("❌ Du hast hier kein Event erstellt.", ephemeral=True)
             return
-        target_id, target_event = max(own_events, key=lambda x: x[0])
+        target_id, _ = max(own_events, key=lambda x: x[0])
 
     try:
         msg = await channel.fetch_message(target_id)
@@ -280,7 +276,7 @@ async def event_delete(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
-# === Reaktions-Handling ===
+# === Reaction Handling ===
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.message_id not in active_events:
@@ -297,18 +293,15 @@ async def on_raw_reaction_add(payload):
     if not member:
         return
 
-    # Nur eine Reaktion pro User
     for e in event["slots"].keys():
         if e != emoji:
             try:
-                message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
-                await message.remove_reaction(e, member)
+                msg = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
+                await msg.remove_reaction(e, member)
             except Exception:
                 pass
 
     slot = event["slots"][emoji]
-
-    # Doppelte Einträge vermeiden
     if payload.user_id in slot["main"] or payload.user_id in slot["waitlist"]:
         return
     for s in event["slots"].values():
@@ -333,15 +326,15 @@ async def on_raw_reaction_remove(payload):
         return
 
     slot = event["slots"][emoji]
-    user_id = payload.user_id
+    uid = payload.user_id
 
-    if user_id in slot["main"]:
-        slot["main"].remove(user_id)
+    if uid in slot["main"]:
+        slot["main"].remove(uid)
         if slot["waitlist"]:
             next_user = slot["waitlist"].pop(0)
             slot["main"].add(next_user)
-    elif user_id in slot["waitlist"]:
-        slot["waitlist"].remove(user_id)
+    elif uid in slot["waitlist"]:
+        slot["waitlist"].remove(uid)
 
     await update_event_message(payload.message_id)
     save_events()
