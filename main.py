@@ -3,6 +3,8 @@ import os
 import re
 import json
 import asyncio
+import base64
+import requests
 from datetime import datetime, timedelta
 from threading import Thread
 import pytz
@@ -18,7 +20,6 @@ if not TOKEN:
     print("❌ DISCORD_TOKEN nicht gesetzt. Bitte als Environment Variable konfigurieren.")
     raise SystemExit(1)
 
-SAVE_FILE = "events.json"
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
 
@@ -33,24 +34,59 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 active_events = {}
 
-# ----------------- Hilfsfunktionen -----------------
+# ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
-    if os.path.exists(SAVE_FILE):
-        try:
-            with open(SAVE_FILE, "r") as f:
-                data = json.load(f)
+    """Lädt events.json aus dem GitHub-Repo."""
+    repo = os.getenv("GITHUB_REPO")
+    path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
+    token = os.getenv("GITHUB_TOKEN")
+
+    if not all([repo, path, token]):
+        print("⚠️ GitHub-Umgebungsvariablen fehlen – kann events.json nicht laden.")
+        return {}
+
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"token {token}"}
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            content = response.json()["content"]
+            data = json.loads(base64.b64decode(content))
             for ev in data.values():
                 for s in ev["slots"].values():
                     s["main"] = set(s.get("main", []))
                     s["waitlist"] = list(s.get("waitlist", []))
                     s["reminded"] = set(s.get("reminded", []))
+            print("✅ events.json erfolgreich von GitHub geladen.")
             return {int(k): v for k, v in data.items()}
-        except Exception as e:
-            print(f"⚠️ Fehler beim Laden von {SAVE_FILE}: {e}")
+        elif response.status_code == 404:
+            print("ℹ️ Keine events.json auf GitHub gefunden – starte leer.")
+            return {}
+        else:
+            print(f"⚠️ Konnte events.json nicht laden (HTTP {response.status_code})")
+    except Exception as e:
+        print(f"❌ Fehler beim Laden von events.json: {e}")
     return {}
 
 def save_events():
+    """Speichert events.json im GitHub-Repo."""
+    repo = os.getenv("GITHUB_REPO")
+    path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
+    token = os.getenv("GITHUB_TOKEN")
+
+    if not all([repo, path, token]):
+        print("⚠️ GitHub-Umgebungsvariablen fehlen – kann events.json nicht speichern.")
+        return
+
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"token {token}"}
+
     try:
+        # Aktuelle Datei abrufen, um SHA zu bekommen
+        get_resp = requests.get(url, headers=headers)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+
         serializable = {}
         for mid, ev in active_events.items():
             copy = json.loads(json.dumps(ev))
@@ -58,11 +94,25 @@ def save_events():
                 s["main"] = list(s["main"])
                 s["reminded"] = list(s["reminded"])
             serializable[str(mid)] = copy
-        with open(SAVE_FILE, "w") as f:
-            json.dump(serializable, f, indent=4)
-    except Exception as e:
-        print(f"⚠️ Fehler beim Speichern: {e}")
 
+        encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
+
+        data = {
+            "message": "Update events.json via bot",
+            "content": encoded_content,
+            "sha": sha
+        }
+
+        response = requests.put(url, headers=headers, json=data)
+
+        if response.status_code in [200, 201]:
+            print("💾 events.json erfolgreich auf GitHub gespeichert.")
+        else:
+            print(f"⚠️ Fehler beim Speichern auf GitHub: HTTP {response.status_code}")
+    except Exception as e:
+        print(f"❌ Fehler beim Speichern: {e}")
+
+# ----------------- Hilfsfunktionen -----------------
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji.strip()
