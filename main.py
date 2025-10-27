@@ -20,7 +20,13 @@ if not TOKEN:
     print("❌ DISCORD_TOKEN nicht gesetzt. Bitte als Environment Variable konfigurieren.")
     raise SystemExit(1)
 
-CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
+# Repo-Config (vom Nutzer gewünscht)
+# Beispiel: DeadScore/SlotBot  +  data/events.json
+GITHUB_REPO = os.getenv("GITHUB_REPO", "DeadScore/SlotBot")
+GITHUB_FILE_PATH = os.getenv("GITHUB_FILE_PATH", "data/events.json")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+CUSTOM_EMOJI_REGEX = r"<a?:\\w+:\\d+>"
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
 
 # ----------------- Intents & Bot -----------------
@@ -45,7 +51,7 @@ WEEKDAY_DE = {
 }
 
 def format_de_datetime(local_dt: datetime) -> str:
-    """Formatiert ein tz-aware Datum in Deutsch mit Wochentag, z.B. 'Samstag, 25.10.2025 20:00 CEST'."""
+    """Formatiert ein tz-aware Datum in Deutsch mit Wochentag, z.B. 'Samstag, 25.10.2025 20:00 CET'."""
     en = local_dt.strftime("%A")
     de = WEEKDAY_DE[en]
     return local_dt.strftime(f"%A, %d.%m.%Y %H:%M %Z").replace(en, de)
@@ -67,7 +73,7 @@ def parse_slots(slots_str: str, guild: discord.Guild):
     Erwartet z.B.: "⚔️:3 🛡️:2 <:Custom:1234567890>:4"
     Gibt dict zurück: {emoji: {"limit": int, "main": set(), "waitlist": [], "reminded": set()}}
     """
-    slot_pattern = re.compile(r"(<a?:\w+:\d+>|\S+)\s*:\s*(\d+)")
+    slot_pattern = re.compile(r"(<a?:\\w+:\\d+>|\\S+)\\s*:\\s*(\\d+)")
     matches = slot_pattern.findall(slots_str or "")
     if not matches:
         return None
@@ -80,14 +86,14 @@ def parse_slots(slots_str: str, guild: discord.Guild):
     return slot_dict
 
 def format_event_text(event, guild):
-    text = "**📋 Eventübersicht:**\n"
+    text = "**📋 Eventübersicht:**\\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
-        text += f"\n{emoji} ({len(main_users)}/{slot['limit']}): "
+        text += f"\\n{emoji} ({len(main_users)}/{slot['limit']}): "
         text += ", ".join(main_users) if main_users else "-"
         if wait_users:
-            text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
+            text += f"\\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
 async def update_event_message(message_id):
@@ -102,16 +108,46 @@ async def update_event_message(message_id):
         return
     try:
         msg = await channel.fetch_message(int(message_id))
-        content = ev["header"] + "\n\n" + format_event_text(ev, guild)
+        content = ev["header"] + "\\n\\n" + format_event_text(ev, guild)
         await msg.edit(content=content)
     except Exception as e:
         print(f"❌ Fehler beim Aktualisieren: {e}")
 
+# ------------ Header-Edit-Helfer (nur letzte Änderung beibehalten) -----------
+def extract_current_value(header: str, prefix_regex: str) -> str:
+    """
+    Liest den aktuell sichtbaren Wert einer Zeile aus.
+    Wenn die Zeile bereits '~~alt~~ → neu' enthält, wird 'neu' zurückgegeben.
+    prefix_regex: z.B. r'^📍 \\*\\*Ort:\\*\\* '
+    """
+    m = re.search(prefix_regex + r"(.*)$", header, re.M)
+    if not m:
+        return ""
+    val = m.group(1).strip()
+    arrow = "→"
+    if "~~" in val and arrow in val:
+        # Beispiel: '~~Alt~~ → Neu'
+        parts = val.split(arrow, 1)
+        return parts[1].strip()
+    return val
+
+def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_value: str) -> str:
+    """
+    Ersetzt die komplette Zeile 'prefix_label <wert>' mit 'prefix_label ~~old_visible~~ → new_value'
+    prefix_label: z.B. '📍 **Ort:**'
+    """
+    line_regex = re.compile(rf"^{re.escape(prefix_label)} .*?$", re.M)
+    replacement = f"{prefix_label} ~~{old_visible}~~ → {new_value}"
+    if line_regex.search(header):
+        return line_regex.sub(replacement, header)
+    # Falls die Zeile nicht existiert, hänge an.
+    return header.rstrip() + f"\\n{replacement}"
+
 # ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
-    repo = os.getenv("GITHUB_REPO")
-    path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
-    token = os.getenv("GITHUB_TOKEN")
+    repo = GITHUB_REPO
+    path = GITHUB_FILE_PATH
+    token = GITHUB_TOKEN
     if not all([repo, path, token]):
         print("⚠️ GitHub-Variablen fehlen.")
         return {}
@@ -141,9 +177,9 @@ def load_events():
         return {}
 
 def save_events():
-    repo = os.getenv("GITHUB_REPO")
-    path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
-    token = os.getenv("GITHUB_TOKEN")
+    repo = GITHUB_REPO
+    path = GITHUB_FILE_PATH
+    token = GITHUB_TOKEN
     if not all([repo, path, token]):
         print("⚠️ GitHub-Variablen fehlen.")
         return
@@ -202,7 +238,7 @@ async def reminder_task():
 @bot.event
 async def on_ready():
     global active_events
-    print(f"✅ Bot online als {bot.user}")
+    print(f"✅ SlotBot online als {bot.user}")
     active_events = load_events()
     bot.loop.create_task(reminder_task())
     try:
@@ -215,30 +251,30 @@ async def on_ready():
 @bot.tree.command(name="help", description="Zeigt alle verfügbaren Befehle und Beispiele an")
 async def help_command(interaction: discord.Interaction):
     help_text = (
-        "## 📖 **Event-Bot Hilfe**\n"
-        "Hier findest du alle verfügbaren Befehle und Beispiele zur Nutzung.\n\n"
-        "### 🆕 `/event`\n"
-        "Erstellt ein neues Event mit Datum, Zeit, Ort und Slots.\n"
-        "Beispiel:\n"
-        "```/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 level:61+ "
-        "stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"```\n"
-        "➡️ Erstellt ein Event mit Reaktions-Slots und Thread.\n\n"
-        "### ✏️ `/event_edit`\n"
-        "Bearbeite dein bestehendes Event (nur vom Ersteller möglich). Alte Werte werden **durchgestrichen** angezeigt.\n"
-        "Beispiel:\n"
-        "```/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ anmerkung:\"Treffen 10 Min früher\"```\n"
-        "➡️ Aktualisiert Werte und loggt es im Event-Thread.\n\n"
-        "### 🔁 Slots bearbeiten\n"
-        "```/event_edit slots:\"⚔️:2 🛡️:2 💉:1\"```\n\n"
-        "### ❌ `/event_delete`\n"
-        "```/event_delete```\n\n"
-        "### ℹ️ `/help`\n"
-        "Zeigt diese Hilfe an.\n\n"
-        "### 💡 **Hinweise:**\n"
-        "- 🔔 10-Minuten-Reminder per DM\n"
-        "- 💾 Persistenz via GitHub (`data/events.json`)\n"
-        "- ✨ Änderungen an Datum/Ort/Level zeigen den letzten alten Wert ~~durchgestrichen~~\n"
-        "- 🧵 Änderungen werden im Thread-Log dokumentiert\n"
+        "## 📖 **Event-Bot Hilfe**\\n"
+        "Hier findest du alle verfügbaren Befehle und Beispiele zur Nutzung.\\n\\n"
+        "### 🆕 `/event`\\n"
+        "Erstellt ein neues Event mit Datum, Zeit, Ort und Slots.\\n"
+        "Beispiel:\\n"
+        "```/event art:PvE zweck:\\\"XP Farmen\\\" ort:\\\"Calpheon\\\" datum:27.10.2025 zeit:20:00 level:61+ "
+        "stil:\\\"Organisiert\\\" slots:\\\"⚔️:3 🛡️:1 💉:2\\\" typ:\\\"Gruppe\\\" gruppenlead:\\\"Matze\\\" anmerkung:\\\"Treffpunkt vor der Bank\\\"```\\n"
+        "➡️ Erstellt ein Event mit Reaktions-Slots und Thread.\\n\\n"
+        "### ✏️ `/event_edit`\\n"
+        "Bearbeite dein bestehendes Event (nur vom Ersteller möglich). Alte Werte werden **durchgestrichen** angezeigt.\\n"
+        "Beispiel:\\n"
+        "```/event_edit datum:28.10.2025 zeit:21:00 ort:\\\"Velia\\\" level:62+ anmerkung:\\\"Treffen 10 Min früher\\\"```\\n"
+        "➡️ Aktualisiert Werte und loggt es im Event-Thread.\\n\\n"
+        "### 🔁 Slots bearbeiten\\n"
+        "```/event_edit slots:\\\"⚔️:2 🛡️:2 💉:1\\\"```\\n\\n"
+        "### ❌ `/event_delete`\\n"
+        "```/event_delete```\\n\\n"
+        "### ℹ️ `/help`\\n"
+        "Zeigt diese Hilfe an.\\n\\n"
+        "### 💡 **Hinweise:**\\n"
+        "- 🔔 10-Minuten-Reminder per DM\\n"
+        "- 💾 Persistenz via GitHub (`data/events.json`)\\n"
+        "- ✨ Änderungen an Datum/Ort/Level zeigen den letzten alten Wert ~~durchgestrichen~~\\n"
+        "- 🧵 Änderungen werden im Thread-Log dokumentiert\\n"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -297,20 +333,20 @@ async def event(interaction: discord.Interaction,
 
     # Header aufbauen
     header = (
-        f"📣 **@here — Neue Gruppensuche!**\n\n"
-        f"🗡️ **Art:** {art.value}\n"
-        f"🎯 **Zweck:** {zweck}\n"
-        f"📍 **Ort:** {ort}\n"
-        f"🕒 **Datum/Zeit:** {time_str}\n"
-        f"⚔️ **Levelbereich:** {level}\n"
-        f"💬 **Stil:** {stil.value}\n"
+        f"📣 **@here — Neue Gruppensuche!**\\n\\n"
+        f"🗡️ **Art:** {art.value}\\n"
+        f"🎯 **Zweck:** {zweck}\\n"
+        f"📍 **Ort:** {ort}\\n"
+        f"🕒 **Datum/Zeit:** {time_str}\\n"
+        f"⚔️ **Levelbereich:** {level}\\n"
+        f"💬 **Stil:** {stil.value}\\n"
     )
-    if typ: header += f"🏷️ **Typ:** {typ.value}\n"
-    if gruppenlead: header += f"👑 **Gruppenlead:** {gruppenlead}\n"
-    if anmerkung: header += f"📝 **Anmerkung:** {anmerkung}\n"
+    if typ: header += f"🏷️ **Typ:** {typ.value}\\n"
+    if gruppenlead: header += f"👑 **Gruppenlead:** {gruppenlead}\\n"
+    if anmerkung: header += f"📝 **Anmerkung:** {anmerkung}\\n"
 
     # Nachricht + Reaktionen
-    msg = await interaction.channel.send(header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild))
+    msg = await interaction.channel.send(header + "\\n\\n" + format_event_text({"slots": slot_dict}, interaction.guild))
     await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
     for e in slot_dict.keys():
         try:
@@ -359,6 +395,12 @@ async def event_edit(interaction: discord.Interaction,
         return
     msg_id, ev = max(own, key=lambda x: x[0])
     changed_fields = []
+    thread_changes = []
+
+    # Konstanten für Prefixe
+    PREFIX_DATE = "🕒 **Datum/Zeit:**"
+    PREFIX_ORG = "📍 **Ort:**"
+    PREFIX_LEVEL = "⚔️ **Levelbereich:**"
 
     # Datum/Zeit
     if datum or zeit:
@@ -369,48 +411,55 @@ async def event_edit(interaction: discord.Interaction,
                 "%d.%m.%Y %H:%M"
             ))
             new_str = format_de_datetime(new_local)
-            old_str = format_de_datetime(old_local)
-            ev["header"] = re.sub(
-                r"🕒 \*\*Datum/Zeit:\*\* .+",
-                f"🕒 **Datum/Zeit:** ~~{old_str}~~ → {new_str}",
-                ev["header"]
-            )
+            # aktuellen sichtbaren Wert aus Header extrahieren
+            current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_DATE)} ")
+            if not current_visible:
+                current_visible = format_de_datetime(old_local)
+            ev["header"] = replace_with_struck(ev["header"], PREFIX_DATE, current_visible, new_str)
             ev["event_time"] = new_local.astimezone(pytz.utc)
             changed_fields.append("Datum/Zeit")
+            thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
             await interaction.response.send_message("❌ Fehler im Datumsformat.", ephemeral=True)
             return
 
     # Ort
     if ort:
-        match = re.search(r"📍 \*\*Ort:\*\* (.+)", ev["header"])
-        old_ort = match.group(1) if match else "?"
-        ev["header"] = re.sub(r"📍 \*\*Ort:\*\* .+", f"📍 **Ort:** ~~{old_ort}~~ → {ort}", ev["header"])
+        current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_ORG)} ")
+        if not current_visible:
+            # Erst-Erstellung hatte plain Wert nach dem Prefix
+            m = re.search(rf"^{re.escape(PREFIX_ORG)} (.+)$", ev["header"], re.M)
+            current_visible = m.group(1) if m else "?"
+        ev["header"] = replace_with_struck(ev["header"], PREFIX_ORG, current_visible, ort)
         changed_fields.append("Ort")
+        thread_changes.append(f"Ort: ~~{current_visible}~~ → {ort}")
 
     # Level
     if level:
-        match = re.search(r"⚔️ \*\*Levelbereich:\*\* (.+)", ev["header"])
-        old_lvl = match.group(1) if match else "?"
-        ev["header"] = re.sub(r"⚔️ \*\*Levelbereich:\*\* .+", f"⚔️ **Levelbereich:** ~~{old_lvl}~~ → {level}", ev["header"])
+        current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_LEVEL)} ")
+        if not current_visible:
+            m = re.search(rf"^{re.escape(PREFIX_LEVEL)} (.+)$", ev["header"], re.M)
+            current_visible = m.group(1) if m else "?"
+        ev["header"] = replace_with_struck(ev["header"], PREFIX_LEVEL, current_visible, level)
         changed_fields.append("Level")
+        thread_changes.append(f"Level: ~~{current_visible}~~ → {level}")
 
-    # Anmerkung
+    # Anmerkung (ohne Strike)
     if anmerkung:
         if "📝 **Anmerkung:**" in ev["header"]:
-            ev["header"] = re.sub(r"📝 \*\*Anmerkung:\*\* .+", f"📝 **Anmerkung:** {anmerkung}", ev["header"])
+            ev["header"] = re.sub(r"📝 \\*\\*Anmerkung:\\*\\* .+", f"📝 **Anmerkung:** {anmerkung}", ev["header"])
         else:
-            ev["header"] += f"📝 **Anmerkung:** {anmerkung}\n"
+            ev["header"] += f"📝 **Anmerkung:** {anmerkung}\\n"
         changed_fields.append("Anmerkung")
+        thread_changes.append("Anmerkung aktualisiert")
 
     # Slots
     if slots:
         parsed = parse_slots(slots, interaction.guild)
         if parsed is None or isinstance(parsed, str):
-            await interaction.response.send_message(f"❌ Ungültige Slots. Beispiel: ⚔️:2 🛡️:1", ephemeral=True)
+            await interaction.response.send_message("❌ Ungültige Slots. Beispiel: ⚔️:2 🛡️:1", ephemeral=True)
             return
         ev["slots"] = parsed
-        # Reaktionen neu setzen
         guild = interaction.guild
         channel = guild.get_channel(ev["channel_id"])
         msg = await channel.fetch_message(msg_id)
@@ -424,6 +473,7 @@ async def event_edit(interaction: discord.Interaction,
             except Exception:
                 pass
         changed_fields.append("Slots")
+        thread_changes.append("Slots angepasst")
 
     # Nachricht & Speicherung
     await update_event_message(msg_id)
@@ -435,8 +485,11 @@ async def event_edit(interaction: discord.Interaction,
     if thread_id:
         thread = interaction.guild.get_channel(thread_id)
         if thread:
-            changes = ", ".join(changed_fields) if changed_fields else "Details"
-            await thread.send(f"✏️ **{interaction.user.mention}** hat das Event bearbeitet ({changes}).")
+            changes = ", ".join(thread_changes) if thread_changes else "Details geändert"
+            try:
+                await thread.send(f"✏️ **{interaction.user.mention}** hat das Event bearbeitet ({changes}).")
+            except Exception:
+                pass
 
 # ----------------- /event_delete -----------------
 @bot.tree.command(name="event_delete", description="Löscht nur dein eigenes Event")
