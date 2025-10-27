@@ -83,7 +83,6 @@ def save_events():
     headers = {"Authorization": f"token {token}"}
 
     try:
-        # Aktuelle Datei abrufen, um SHA zu bekommen
         get_resp = requests.get(url, headers=headers)
         sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
 
@@ -96,12 +95,7 @@ def save_events():
             serializable[str(mid)] = copy
 
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
-
-        data = {
-            "message": "Update events.json via bot",
-            "content": encoded_content,
-            "sha": sha
-        }
+        data = {"message": "Update events.json via bot", "content": encoded_content, "sha": sha}
 
         response = requests.put(url, headers=headers, json=data)
 
@@ -258,7 +252,20 @@ async def event(interaction: discord.Interaction,
             return
         slot_dict[emoji] = {"limit": limit, "main": set(), "waitlist": [], "reminded": set()}
 
-    time_str = local_dt.strftime("%d.%m.%Y %H:%M %Z")
+    # --- 🗓️ Wochentag automatisch anhängen ---
+    weekday = local_dt.strftime("%A")
+    weekday_de = {
+        "Monday": "Montag",
+        "Tuesday": "Dienstag",
+        "Wednesday": "Mittwoch",
+        "Thursday": "Donnerstag",
+        "Friday": "Freitag",
+        "Saturday": "Samstag",
+        "Sunday": "Sonntag"
+    }[weekday]
+    time_str = local_dt.strftime(f"%A, %d.%m.%Y %H:%M %Z").replace(weekday, weekday_de)
+    # ------------------------------------------
+
     header = (
         f"📣 **@here — Neue Gruppensuche!**\n\n"
         f"🗡️ **Art:** {art.value}\n"
