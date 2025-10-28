@@ -1,4 +1,4 @@
-# main.py
+# main.py — SlotBot (vollständig)
 import os
 import re
 import json
@@ -33,7 +33,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 active_events = {}  # message_id -> event data
 
-# ----------------- Datum/Zeit Format -----------------
+# ----------------- Datum/Zeit -----------------
 WEEKDAY_DE = {
     "Monday": "Montag",
     "Tuesday": "Dienstag",
@@ -45,12 +45,11 @@ WEEKDAY_DE = {
 }
 
 def format_de_datetime(local_dt: datetime) -> str:
-    """Formatiert ein tz-aware Datum in Deutsch mit Wochentag, z.B. 'Samstag, 25.10.2025 20:00 CET'."""
     en = local_dt.strftime("%A")
     de = WEEKDAY_DE.get(en, en)
     return local_dt.strftime(f"%A, %d.%m.%Y %H:%M %Z").replace(en, de)
 
-# ----------------- Emoji/Slots Utils -----------------
+# ----------------- Emoji/Slots -----------------
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji.strip()
@@ -66,10 +65,6 @@ def is_valid_emoji(emoji, guild):
 SLOT_PATTERN = re.compile(r"\s*(<a?:\w+:\d+>|[^\s:]+)\s*:\s*(\d+)")
 
 def parse_slots(slots_str: str, guild: discord.Guild):
-    """
-    Erwartet z.B.: "⚔️:3 🛡️:2 <:Custom:1234567890>:4" (Leerzeichen rund um ':' erlaubt)
-    Gibt dict zurück: {emoji: {"limit": int, "main": set(), "waitlist": [], "reminded": set()}}
-    """
     matches = SLOT_PATTERN.findall(slots_str or "")
     if not matches:
         return None
@@ -92,51 +87,23 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
-# ----------------- Header-Edit-Helfer (nur letzte Änderung beibehalten) -----------
+# ----------------- Header-Edit Utils (nur letzte Änderung) -----------------
 def extract_current_value(header: str, prefix_regex: str) -> str:
-    """
-    Liest den aktuell sichtbaren Wert einer Zeile aus.
-    Wenn die Zeile bereits '~~alt~~ → neu' enthält, wird 'neu' zurückgegeben.
-    prefix_regex: z.B. r'^📍 \*\*Ort:\*\* '
-    """
     m = re.search(prefix_regex + r"(.*)$", header, re.M)
     if not m:
         return ""
     val = m.group(1).strip()
-    arrow = "→"
-    if "~~" in val and arrow in val:
-        parts = val.split(arrow, 1)
+    if "~~" in val and "→" in val:
+        parts = val.split("→", 1)
         return parts[1].strip()
     return val
 
 def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_value: str) -> str:
-    """
-    Ersetzt die komplette Zeile 'prefix_label <wert>' mit 'prefix_label ~~old_visible~~ → new_value'
-    prefix_label: z.B. '📍 **Ort:**'
-    """
     line_regex = re.compile(rf"^{re.escape(prefix_label)} .*?$", re.M)
     replacement = f"{prefix_label} ~~{old_visible}~~ → {new_value}"
     if line_regex.search(header):
         return line_regex.sub(replacement, header)
-    # Falls die Zeile nicht existiert, anhängen
     return header.rstrip() + f"\n{replacement}"
-
-async def update_event_message(message_id):
-    ev = active_events.get(message_id)
-    if not ev:
-        return
-    guild = bot.get_guild(ev["guild_id"])
-    if not guild:
-        return
-    channel = guild.get_channel(ev["channel_id"])
-    if not channel:
-        return
-    try:
-        msg = await channel.fetch_message(int(message_id))
-        content = ev["header"] + "\n\n" + format_event_text(ev, guild)
-        await msg.edit(content=content)
-    except Exception as e:
-        print(f"❌ Fehler beim Aktualisieren: {e}")
 
 # ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
@@ -153,7 +120,6 @@ def load_events():
         if resp.status_code == 200:
             content = base64.b64decode(resp.json()["content"])
             data = json.loads(content)
-            # Sets rekonstruieren
             for ev in data.values():
                 for s in ev["slots"].values():
                     s["main"] = set(s.get("main", []))
@@ -260,9 +226,8 @@ async def help_command(interaction: discord.Interaction):
         "```/event_delete```\n\n"
         "— Hinweise —\n"
         "- 🔔 10-Minuten-Reminder per DM\n"
-        "- 💾 Persistenz via GitHub (`data/events.json`)\n"
         "- ✨ Änderungen an Datum/Ort/Level zeigen den letzten alten Wert ~~durchgestrichen~~\n"
-        "- 🧵 Änderungen werden im Thread-Log dokumentiert\n"
+        "- 🧵 Änderungen werden im Thread-Log dokumentiert (inkl. Auto-Unarchive)\n"
         "- 🔤 Slots akzeptieren `⚔️:2`, `⚔️ : 2` oder `<:Tank:123>: 3`\n"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
@@ -310,7 +275,6 @@ async def event(interaction: discord.Interaction,
                 gruppenlead: str = None,
                 anmerkung: str = None):
 
-    # Datum/Zeit prüfen
     try:
         local_dt = BERLIN_TZ.localize(datetime.strptime(f"{datum} {zeit}", "%d.%m.%Y %H:%M"))
         utc_dt = local_dt.astimezone(pytz.utc)
@@ -321,7 +285,6 @@ async def event(interaction: discord.Interaction,
         await interaction.response.send_message("❌ Ungültiges Format! Nutze DD.MM.YYYY HH:MM", ephemeral=True)
         return
 
-    # Slots parsen
     slot_dict = parse_slots(slots, interaction.guild)
     if slot_dict is None:
         await interaction.response.send_message("❌ Keine gültigen Slots gefunden.", ephemeral=True)
@@ -330,10 +293,8 @@ async def event(interaction: discord.Interaction,
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Zeitstring mit Wochentag
     time_str = format_de_datetime(local_dt)
 
-    # Header
     header = (
         f"📣 **@here — Neue Gruppensuche!**\n\n"
         f"🗡️ **Art:** {art.value}\n"
@@ -350,7 +311,6 @@ async def event(interaction: discord.Interaction,
     if anmerkung:
         header += f"📝 **Anmerkung:** {anmerkung}\n"
 
-    # Nachricht + Reaktionen
     await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild))
     for e in slot_dict.keys():
@@ -359,7 +319,6 @@ async def event(interaction: discord.Interaction,
         except Exception:
             pass
 
-    # Thread
     try:
         thread = await msg.create_thread(name=f"Event-Log: {zweck} {datum} {zeit}", auto_archive_duration=1440)
         await thread.send(f"🧵 Event-Log für: {zweck} — {msg.jump_url}")
@@ -368,7 +327,6 @@ async def event(interaction: discord.Interaction,
         print(f"⚠️ Thread konnte nicht erstellt werden: {e}")
         thread_id = None
 
-    # Speichern
     active_events[msg.id] = {
         "title": zweck,
         "slots": slot_dict,
@@ -483,16 +441,18 @@ async def event_edit(interaction: discord.Interaction,
     save_events()
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
-    # Thread-Log
+    # Thread-Log (mit Auto-Unarchive)
     thread_id = ev.get("thread_id")
     if thread_id:
         thread = interaction.guild.get_channel(thread_id)
         if thread:
-            changes = ", ".join(thread_changes) if thread_changes else "Details geändert"
             try:
+                if hasattr(thread, "archived") and thread.archived:
+                    await thread.edit(archived=False)
+                changes = ", ".join(thread_changes) if thread_changes else "Details geändert"
                 await thread.send(f"✏️ **{interaction.user.mention}** hat das Event bearbeitet ({changes}).")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ Thread-Update fehlgeschlagen: {e}")
 
 # ----------------- /event_delete -----------------
 @bot.tree.command(name="event_delete", description="Löscht nur dein eigenes Event")
@@ -586,7 +546,7 @@ flask_app = Flask("bot_flask")
 
 @flask_app.route("/")
 def index():
-    return "✅ Discord-Bot läuft (Render kompatibel)."
+    return "✅ SlotBot läuft (Render kompatibel)."
 
 def run_bot():
     asyncio.run(bot.start(TOKEN))
