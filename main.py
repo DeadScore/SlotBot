@@ -1,20 +1,4 @@
-# main.py — SlotBot v4.1 (Full)
-# Features:
-# - /event, /event_edit, /event_delete, /help (Embed)
-# - Deutsche Wochentage im Datum
-# - Strike-Through bei Änderungen (immer nur letzte Änderung sichtbar)
-# - Thread-Log robust (Auto-Unarchive, Fallback-Neuerstellung)
-# - Google-Kalender Button (Add-to-Google, barriereärmer als .ics)
-# - 10-Minuten-Reminder per DM
-# - Persistenz über GitHub (data/events.json)
-# - Slots robust mit/ohne Leerzeichen
-# - Flask für Render (Healthcheck)
-#
-# Env Vars:
-# - DISCORD_TOKEN (Pflicht)
-# - GITHUB_TOKEN (Empfohlen, für Persistenz)
-# - GITHUB_REPO (z.B. "username/repo")
-# - GITHUB_FILE_PATH (z.B. "data/events.json")
+# main.py — SlotBot v4.2 (Full, Reaction-Fix)
 
 import os
 import re
@@ -32,7 +16,6 @@ from discord.ext import commands
 from discord import app_commands
 from flask import Flask
 
-# ----------------- Konfiguration -----------------
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     print("❌ DISCORD_TOKEN nicht gesetzt. Bitte als Environment Variable konfigurieren.")
@@ -41,7 +24,6 @@ if not TOKEN:
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
 
-# ----------------- Intents & Bot -----------------
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -50,11 +32,10 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# In-Memory
-active_events = {}  # message_id -> event data
+active_events = {}
 EVENTS_LOADED = False
+SAVE_LOCK = asyncio.Lock()
 
-# ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
     "Monday": "Montag",
     "Tuesday": "Dienstag",
@@ -66,13 +47,11 @@ WEEKDAY_DE = {
 }
 
 def format_de_datetime(local_dt: datetime) -> str:
-    """Formatiert z. B.: 'Samstag, 25.10.2025 20:00 CET'."""
     en = local_dt.strftime("%A")
     de = WEEKDAY_DE.get(en, en)
     return local_dt.strftime(f"%A, %d.%m.%Y %H:%M %Z").replace(en, de)
 
 def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
-    """Google Calendar: UTC im Format YYYYMMDDTHHMMSSZ/..., Ende = Start + duration_hours."""
     end_utc = start_utc + timedelta(hours=duration_hours)
     fmt = "%Y%m%dT%H%M%SZ"
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
@@ -85,7 +64,6 @@ def build_google_calendar_url(title: str, start_utc: datetime, location: str, de
     details = "&details=" + quote_plus(description or "")
     return base + text + dates + loc + details
 
-# ----------------- Slots / Emojis -----------------
 def normalize_emoji(emoji):
     if isinstance(emoji, str):
         return emoji.strip()
@@ -98,11 +76,9 @@ def is_valid_emoji(emoji, guild):
         return any(str(e) == emoji for e in guild.emojis)
     return True
 
-# erlaubt: '<:Tank:123>:3' oder '⚔️:2' oder '⚔️ : 2'
 SLOT_PATTERN = re.compile(r"(<a?:\w+:\d+>|[^\s:]+)\s*:\s*(\d+)")
 
 def parse_slots(slots_str: str, guild: discord.Guild):
-    """Akzeptiert: '⚔️:2 🛡️:1' oder '⚔️ : 2' oder '<:Tank:123>: 3'"""
     matches = SLOT_PATTERN.findall(slots_str or "")
     if not matches:
         return None
@@ -125,9 +101,7 @@ def format_event_text(event, guild):
             text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
     return text
 
-# ----------------- Strike-Through Utilities -----------------
 def extract_current_value(header: str, prefix_regex: str) -> str:
-    """Gibt den sichtbaren Wert nach einem evtl. '~~alt~~ → neu' zurück."""
     m = re.search(prefix_regex + r"(.*)$", header, re.M)
     if not m:
         return ""
@@ -138,7 +112,6 @@ def extract_current_value(header: str, prefix_regex: str) -> str:
     return val
 
 def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_value: str) -> str:
-    """Ersetzt Zeile mit 'prefix_label ~~alt~~ → neu' (immer nur die letzte Änderung sichtbar)."""
     line_regex = re.compile(rf"^{re.escape(prefix_label)} .*?$", re.M)
     if line_regex.search(header):
         def _sub(m):
@@ -163,15 +136,16 @@ async def update_event_message(message_id):
     channel = guild.get_channel(ev["channel_id"])
     if not channel:
         return
-    try:
-        msg = await channel.fetch_message(int(message_id))
-        await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
-    except Exception as e:
-        print(f"❌ Fehler beim Aktualisieren: {e}")
+    for _ in range(3):
+        try:
+            msg = await channel.fetch_message(int(message_id))
+            await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
+            return
+        except Exception:
+            await asyncio.sleep(1)
+    print(f"❌ Fehler beim Aktualisieren von Message {message_id}")
 
-# ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
-    """Lädt events.json aus dem GitHub-Repo und konvertiert Typen korrekt."""
     repo = os.getenv("GITHUB_REPO")
     path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
     token = os.getenv("GITHUB_TOKEN")
@@ -181,19 +155,17 @@ def load_events():
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = {"Authorization": f"token {token}"}
     try:
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers, timeout=10)
         if r.status_code == 200:
             raw = json.loads(base64.b64decode(r.json()["content"]))
             fixed = {}
             for k, ev in raw.items():
-                # ID-Typen fixen
                 for key in ("creator_id", "channel_id", "guild_id", "thread_id"):
                     if key in ev:
                         try:
                             ev[key] = int(ev[key])
                         except Exception:
                             pass
-                # Slots re-hydrieren
                 for s in ev.get("slots", {}).values():
                     s["main"] = set(s.get("main", []))
                     s["waitlist"] = list(s.get("waitlist", []))
@@ -211,7 +183,6 @@ def load_events():
     return {}
 
 def save_events():
-    """Speichert events.json im GitHub-Repo."""
     repo = os.getenv("GITHUB_REPO")
     path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
     token = os.getenv("GITHUB_TOKEN")
@@ -221,7 +192,7 @@ def save_events():
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = {"Authorization": f"token {token}"}
     try:
-        get_resp = requests.get(url, headers=headers)
+        get_resp = requests.get(url, headers=headers, timeout=10)
         sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
 
         serializable = {}
@@ -233,8 +204,8 @@ def save_events():
             serializable[str(mid)] = copy
 
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
-        data = {"message": "Update events.json via SlotBot v4.1", "content": encoded_content, "sha": sha}
-        resp = requests.put(url, headers=headers, json=data)
+        data = {"message": "Update events.json via SlotBot v4.2", "content": encoded_content, "sha": sha}
+        resp = requests.put(url, headers=headers, json=data, timeout=10)
         if resp.status_code in [200, 201]:
             print("💾 events.json erfolgreich auf GitHub gespeichert.")
         else:
@@ -242,7 +213,21 @@ def save_events():
     except Exception as e:
         print(f"❌ Fehler beim Speichern: {e}")
 
-# ----------------- Reminder -----------------
+async def safe_save():
+    async with SAVE_LOCK:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, save_events)
+
+async def try_reload_if_missing(message_id: int):
+    if message_id in active_events:
+        return True
+    fresh = load_events()
+    if fresh:
+        active_events.clear()
+        active_events.update(fresh)
+        return message_id in active_events
+    return False
+
 async def reminder_task():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -257,7 +242,7 @@ async def reminder_task():
             for emoji, slot in ev["slots"].items():
                 if "reminded" not in slot:
                     slot["reminded"] = set()
-                for user_id in slot["main"]:
+                for user_id in list(slot["main"]):
                     if user_id in slot["reminded"]:
                         continue
                     seconds_left = (event_time - now).total_seconds()
@@ -270,13 +255,10 @@ async def reminder_task():
                             pass
         await asyncio.sleep(60)
 
-# ----------------- Thread Helper -----------------
 async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id: int):
-    """Gibt den Thread zurück (unarchiviert). Erstellt bei Bedarf neu und speichert thread_id."""
     thread = None
     thread_id = ev.get("thread_id")
     if thread_id:
-        # Versuche verschiedene Wege, den Thread zu bekommen
         thread = guild.get_channel(thread_id)
         if thread is None:
             try:
@@ -289,7 +271,6 @@ async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id:
         except Exception:
             pass
     if thread is None:
-        # Neu erstellen
         channel = guild.get_channel(ev["channel_id"])
         if channel is None:
             return None
@@ -297,30 +278,29 @@ async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id:
             base_msg = await channel.fetch_message(base_message_id)
             thread = await base_msg.create_thread(name=f"Event-Log (neu): {ev['title']}", auto_archive_duration=1440)
             ev["thread_id"] = thread.id
-            save_events()
+            await safe_save()
         except Exception as e:
             print(f"⚠️ Konnte keinen Thread erstellen: {e}")
             return None
     return thread
 
 async def post_event_update_log(ev: dict, guild: discord.Guild, editor_mention: str, changes_text: str, base_message_id: int):
-    """Postet eine kompakte Änderungsliste in den Thread (ohne Zeitstempel)."""
     thread = await get_or_restore_thread(ev, guild, base_message_id)
     if not thread:
         print("⚠️ Kein Thread verfügbar für Log-Post.")
         return
-    try:
-        await thread.send(f"✏️ **{editor_mention}** hat das Event bearbeitet ({changes_text}).")
-    except Exception as e:
-        print(f"⚠️ Konnte Thread-Update nicht senden: {e}")
+    for _ in range(3):
+        try:
+            await thread.send(f"✏️ **{editor_mention}** hat das Event bearbeitet ({changes_text}).")
+            return
+        except Exception:
+            await asyncio.sleep(1)
 
-# ----------------- Views -----------------
 class CalendarView(discord.ui.View):
     def __init__(self, url: str):
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="📆 Zum Google Kalender hinzufügen", url=url))
 
-# ----------------- Events -----------------
 @bot.event
 async def on_ready():
     global active_events, EVENTS_LOADED
@@ -334,7 +314,6 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
 
-# ----------------- /help (Embed) -----------------
 @bot.tree.command(name="help", description="Zeigt alle verfügbaren Befehle und Beispiele an")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -380,7 +359,6 @@ async def help_command(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ----------------- /event -----------------
 @bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/PVX)",
@@ -413,7 +391,6 @@ async def event(interaction: discord.Interaction,
                 gruppenlead: str = None,
                 anmerkung: str = None):
 
-    # Datum/Zeit prüfen
     try:
         local_dt = BERLIN_TZ.localize(datetime.strptime(f"{datum} {zeit}", "%d.%m.%Y %H:%M"))
         utc_dt = local_dt.astimezone(pytz.utc)
@@ -424,7 +401,6 @@ async def event(interaction: discord.Interaction,
         await interaction.response.send_message("❌ Ungültiges Format! Nutze DD.MM.YYYY HH:MM", ephemeral=True)
         return
 
-    # Slots parsen
     slot_dict = parse_slots(slots, interaction.guild)
     if slot_dict is None:
         await interaction.response.send_message("❌ Keine gültigen Slots gefunden.", ephemeral=True)
@@ -433,7 +409,6 @@ async def event(interaction: discord.Interaction,
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Header bauen
     time_str = format_de_datetime(local_dt)
     header = (
         f"📣 **@here — Neue Gruppensuche!**\n\n"
@@ -451,7 +426,6 @@ async def event(interaction: discord.Interaction,
     if anmerkung:
         header += f"📝 **Anmerkung:** {anmerkung}\n"
 
-    # Öffentliche Kalender-URL (inkl. Beschreibung)
     description = (
         f"Art: {art.value}\n"
         f"Zweck: {zweck}\n"
@@ -471,7 +445,6 @@ async def event(interaction: discord.Interaction,
     )
     view = CalendarView(gcal_url)
 
-    # Nachricht + Reaktionen + View
     await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
     msg = await interaction.channel.send(header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild), view=view)
 
@@ -481,7 +454,6 @@ async def event(interaction: discord.Interaction,
         except Exception:
             pass
 
-    # Thread
     try:
         thread = await msg.create_thread(name=f"Event-Log: {zweck} {datum} {zeit}", auto_archive_duration=1440)
         await thread.send(f"🧵 Event-Log für: {zweck} — {msg.jump_url}")
@@ -490,7 +462,6 @@ async def event(interaction: discord.Interaction,
         print(f"⚠️ Thread konnte nicht erstellt werden: {e}")
         thread_id = None
 
-    # Speichern
     active_events[msg.id] = {
         "title": zweck,
         "slots": slot_dict,
@@ -501,9 +472,8 @@ async def event(interaction: discord.Interaction,
         "event_time": utc_dt,
         "thread_id": thread_id,
     }
-    save_events()
+    await safe_save()
 
-# ----------------- /event_edit -----------------
 @bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
 @app_commands.describe(
     datum="Neues Datum (DD.MM.YYYY)",
@@ -529,7 +499,6 @@ async def event_edit(interaction: discord.Interaction,
     PREFIX_ORG = "📍 **Ort:**"
     PREFIX_LEVEL = "⚔️ **Levelbereich:**"
 
-    # Datum/Zeit
     if datum or zeit:
         old_local = ev["event_time"].astimezone(BERLIN_TZ)
         try:
@@ -548,7 +517,6 @@ async def event_edit(interaction: discord.Interaction,
             await interaction.response.send_message("❌ Fehler im Datumsformat (DD.MM.YYYY / HH:MM).", ephemeral=True)
             return
 
-    # Ort
     if ort:
         current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_ORG)} ")
         if not current_visible:
@@ -557,7 +525,6 @@ async def event_edit(interaction: discord.Interaction,
         ev["header"] = replace_with_struck(ev["header"], PREFIX_ORG, current_visible, ort)
         thread_changes.append(f"Ort: ~~{current_visible}~~ → {ort}")
 
-    # Level
     if level:
         current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_LEVEL)} ")
         if not current_visible:
@@ -566,7 +533,6 @@ async def event_edit(interaction: discord.Interaction,
         ev["header"] = replace_with_struck(ev["header"], PREFIX_LEVEL, current_visible, level)
         thread_changes.append(f"Level: ~~{current_visible}~~ → {level}")
 
-    # Anmerkung (ohne Strike)
     if anmerkung:
         if "📝 **Anmerkung:**" in ev["header"]:
             ev["header"] = re.sub(r"📝 \*\*Anmerkung:\*\* .+", f"📝 **Anmerkung:** {anmerkung}", ev["header"])
@@ -574,7 +540,6 @@ async def event_edit(interaction: discord.Interaction,
             ev["header"] += f"📝 **Anmerkung:** {anmerkung}\n"
         thread_changes.append("Anmerkung aktualisiert")
 
-    # Slots
     if slots:
         parsed = parse_slots(slots, interaction.guild)
         if parsed is None or isinstance(parsed, str):
@@ -595,18 +560,15 @@ async def event_edit(interaction: discord.Interaction,
                 pass
         thread_changes.append("Slots angepasst")
 
-    # Nachricht & Speicherung
     await update_event_message(msg_id)
-    save_events()
+    await safe_save()
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
-    # Thread-Log (robust, ohne Zeitstempel)
     if thread_changes:
         guild = interaction.guild
         changes = ", ".join(thread_changes)
         await post_event_update_log(ev, guild, interaction.user.mention, changes, msg_id)
 
-# ----------------- /event_delete -----------------
 @bot.tree.command(name="event_delete", description="Löscht nur dein eigenes Event")
 async def event_delete(interaction: discord.Interaction):
     own_events = [
@@ -629,38 +591,56 @@ async def event_delete(interaction: discord.Interaction):
             except Exception:
                 pass
         del active_events[msg_id]
-        save_events()
+        await safe_save()
         await interaction.response.send_message("✅ Dein Event wurde gelöscht.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Löschen: {e}", ephemeral=True)
 
-# ----------------- Reaction Handling -----------------
+async def _fetch_message_with_retry(channel, message_id, tries=3):
+    for _ in range(tries):
+        try:
+            return await channel.fetch_message(message_id)
+        except Exception:
+            await asyncio.sleep(1)
+    return None
+
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if not EVENTS_LOADED:
-        return
     if payload.user_id == bot.user.id:
         return
+    if payload.message_id not in active_events:
+        ok = await try_reload_if_missing(payload.message_id)
+        if not ok:
+            return
+
     ev = active_events.get(payload.message_id)
-    if not ev:
-        return
     emoji = normalize_emoji(payload.emoji)
     if emoji not in ev["slots"]:
         return
-    guild = bot.get_guild(payload.guild_id)
-    channel = guild.get_channel(payload.channel_id)
-    msg = await channel.fetch_message(payload.message_id)
-    member = guild.get_member(payload.user_id) or await guild.fetch_member(payload.user_id)
 
-    # Nur eine Slot-Reaktion pro Nutzer erlauben
-    for e in ev["slots"]:
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    channel = guild.get_channel(payload.channel_id)
+    if not channel:
+        return
+
+    msg = await _fetch_message_with_retry(channel, payload.message_id)
+    if not msg:
+        return
+
+    try:
+        member = guild.get_member(payload.user_id) or await guild.fetch_member(payload.user_id)
+    except Exception:
+        return
+
+    for e in list(ev["slots"].keys()):
         if e != emoji:
             try:
                 await msg.remove_reaction(e, member)
             except Exception:
                 pass
 
-    # Prüfen, ob Nutzer schon irgendwo drin ist
     if any(payload.user_id in s["main"] or payload.user_id in s["waitlist"] for s in ev["slots"].values()):
         return
 
@@ -671,15 +651,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         slot["waitlist"].append(payload.user_id)
 
     await update_event_message(payload.message_id)
-    save_events()
+    await safe_save()
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    if not EVENTS_LOADED:
-        return
+    if payload.message_id not in active_events:
+        ok = await try_reload_if_missing(payload.message_id)
+        if not ok:
+            return
+
     ev = active_events.get(payload.message_id)
-    if not ev:
-        return
     emoji = normalize_emoji(payload.emoji)
     if emoji not in ev["slots"]:
         return
@@ -692,12 +673,14 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             next_user = slot["waitlist"].pop(0)
             slot["main"].add(next_user)
     elif user_id in slot["waitlist"]:
-        slot["waitlist"].remove(user_id)
+        try:
+            slot["waitlist"].remove(user_id)
+        except ValueError:
+            pass
 
     await update_event_message(payload.message_id)
-    save_events()
+    await safe_save()
 
-# ----------------- Flask (Render) -----------------
 flask_app = Flask("bot_flask")
 
 @flask_app.route("/")
@@ -708,7 +691,7 @@ def run_bot():
     asyncio.run(bot.start(TOKEN))
 
 if __name__ == "__main__":
-    print("🚀 Starte SlotBot + Flask ...")
+    print("🚀 Starte SlotBot v4.2 + Flask ...")
     Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
