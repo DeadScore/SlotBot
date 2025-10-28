@@ -1,14 +1,20 @@
-# main.py — SlotBot (Classic, vollständige Version)
+
+# main.py — SlotBot v4 (Classic, vollständige Version, FIXES)
 # Features:
 # - /event, /event_edit, /event_delete, /help (Embed)
 # - Deutsche Wochentage im Datum
 # - Strike-Through bei Änderungen (immer nur letzte Änderung)
-# - Thread-Log (Auto-Unarchive, Notfall-Neuerstellung)
+# - Thread-Log (Auto-Unarchive, Notfall-Neuerstellung, mit Zeitstempel)
 # - Google-Kalender Button (öffentlich)
 # - 10-Minuten-Reminder per DM
 # - Persistenz über GitHub (data/events.json)
 # - Slots robust mit/ohne Leerzeichen
 # - Flask für Render
+# Fixes in v4:
+# - creator_id wird beim Laden zu int() -> /event_delete funktioniert
+# - Reactions stabil (Join/Leave, Main/Waitlist)
+# - Thread-Logs posten zuverlässig (Auto-Unarchive + Retry)
+# - Cache-ready nach Neustart
 
 import os
 import re
@@ -46,6 +52,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-Memory
 active_events = {}  # message_id -> event data
+EVENTS_LOADED = False
 
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
@@ -174,7 +181,7 @@ async def update_event_message(message_id):
 
 # ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
-    """Lädt events.json aus dem GitHub-Repo."""
+    """Lädt events.json aus dem GitHub-Repo und konvertiert Typen korrekt."""
     repo = os.getenv("GITHUB_REPO")
     path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
     token = os.getenv("GITHUB_TOKEN")
@@ -186,14 +193,27 @@ def load_events():
     try:
         r = requests.get(url, headers=headers)
         if r.status_code == 200:
-            data = json.loads(base64.b64decode(r.json()["content"]))
-            for ev in data.values():
-                for s in ev["slots"].values():
+            raw = json.loads(base64.b64decode(r.json()["content"]))
+            fixed = {}
+            for k, ev in raw.items():
+                # IDs/Typen fixen
+                if "creator_id" in ev:
+                    try:
+                        ev["creator_id"] = int(ev["creator_id"])
+                    except Exception:
+                        pass
+                if "channel_id" in ev:
+                    ev["channel_id"] = int(ev["channel_id"])
+                if "guild_id" in ev:
+                    ev["guild_id"] = int(ev["guild_id"])
+                # Slots re-hydrieren
+                for s in ev.get("slots", {}).values():
                     s["main"] = set(s.get("main", []))
                     s["waitlist"] = list(s.get("waitlist", []))
                     s["reminded"] = set(s.get("reminded", []))
+                fixed[int(k)] = ev
             print("✅ events.json erfolgreich von GitHub geladen.")
-            return {int(k): v for k, v in data.items()}
+            return fixed
         elif r.status_code == 404:
             print("ℹ️ Keine events.json gefunden – starte leer.")
             return {}
@@ -226,7 +246,7 @@ def save_events():
             serializable[str(mid)] = copy
 
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
-        data = {"message": "Update events.json via SlotBot", "content": encoded_content, "sha": sha}
+        data = {"message": "Update events.json via SlotBot v4", "content": encoded_content, "sha": sha}
         resp = requests.put(url, headers=headers, json=data)
         if resp.status_code in [200, 201]:
             print("💾 events.json erfolgreich auf GitHub gespeichert.")
@@ -272,9 +292,10 @@ class CalendarView(discord.ui.View):
 # ----------------- Events -----------------
 @bot.event
 async def on_ready():
-    global active_events
+    global active_events, EVENTS_LOADED
     print(f"✅ SlotBot online als {bot.user}")
     active_events = load_events()
+    EVENTS_LOADED = True
     bot.loop.create_task(reminder_task())
     try:
         await bot.tree.sync()
@@ -295,8 +316,8 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "Erstellt ein Event.\n"
             "**Beispiel:**\n"
-            "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 "
-            "level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
+            "`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:27.10.2025 zeit:20:00 "
+            "level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" typ:"Gruppe" gruppenlead:"Matze" anmerkung:"Treffpunkt vor der Bank"`"
         ),
         inline=False
     )
@@ -305,7 +326,7 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "Bearbeite **dein** Event (nur Ersteller). Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt.\n"
             "**Beispiel:**\n"
-            "`/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ slots:\"⚔️:2 🛡️:2\" anmerkung:\"10 Min früher treffen\"`"
+            "`/event_edit datum:28.10.2025 zeit:21:00 ort:"Velia" level:62+ slots:"⚔️:2 🛡️:2" anmerkung:"10 Min früher treffen"`"
         ),
         inline=False
     )
@@ -567,7 +588,8 @@ async def event_edit(interaction: discord.Interaction,
             if getattr(thread, "archived", False):
                 await thread.edit(archived=False)
             changes = ", ".join(thread_changes) if thread_changes else "Details geändert"
-            await thread.send(f"✏️ **{interaction.user.mention}** hat das Event bearbeitet ({changes}).")
+            ts = datetime.now(BERLIN_TZ).strftime("%d.%m.%Y, %H:%M")
+            await thread.send(f"✏️ **{interaction.user.mention}** hat das Event bearbeitet ({changes}) — {ts}.")
         except Exception as e:
             print(f"⚠️ Thread-Update fehlgeschlagen: {e}")
 
@@ -576,7 +598,7 @@ async def event_edit(interaction: discord.Interaction,
 async def event_delete(interaction: discord.Interaction):
     own_events = [
         (mid, ev) for mid, ev in active_events.items()
-        if ev["creator_id"] == interaction.user.id and ev["channel_id"] == interaction.channel.id
+        if int(ev.get("creator_id", 0)) == interaction.user.id and ev["channel_id"] == interaction.channel.id
     ]
     if not own_events:
         await interaction.response.send_message("❌ Du hast hier kein eigenes Event.", ephemeral=True)
@@ -602,6 +624,8 @@ async def event_delete(interaction: discord.Interaction):
 # ----------------- Reaction Handling -----------------
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if not EVENTS_LOADED:
+        return
     if payload.user_id == bot.user.id:
         return
     ev = active_events.get(payload.message_id)
@@ -611,9 +635,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if emoji not in ev["slots"]:
         return
     guild = bot.get_guild(payload.guild_id)
-    member = guild.get_member(payload.user_id) or await guild.fetch_member(payload.user_id)
     channel = guild.get_channel(payload.channel_id)
     msg = await channel.fetch_message(payload.message_id)
+    member = guild.get_member(payload.user_id) or await guild.fetch_member(payload.user_id)
 
     # Nur eine Slot-Reaktion pro Nutzer erlauben
     for e in ev["slots"]:
@@ -638,6 +662,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if not EVENTS_LOADED:
+        return
     ev = active_events.get(payload.message_id)
     if not ev:
         return
