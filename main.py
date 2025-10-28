@@ -1,4 +1,15 @@
-# main.py 
+# main.py — SlotBot (Classic, vollständige Version)
+# Features:
+# - /event, /event_edit, /event_delete, /help (Embed)
+# - Deutsche Wochentage im Datum
+# - Strike-Through bei Änderungen (immer nur letzte Änderung)
+# - Thread-Log (Auto-Unarchive, Notfall-Neuerstellung)
+# - Google-Kalender Button (öffentlich)
+# - 10-Minuten-Reminder per DM
+# - Persistenz über GitHub (data/events.json)
+# - Slots robust mit/ohne Leerzeichen
+# - Flask für Render
+
 import os
 import re
 import json
@@ -21,7 +32,7 @@ if not TOKEN:
     print("❌ DISCORD_TOKEN nicht gesetzt. Bitte als Environment Variable konfigurieren.")
     raise SystemExit(1)
 
-CUSTOM_EMOJI_REGEX = r"<a?:\\w+:\\d+>"
+CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
 
 # ----------------- Intents & Bot -----------------
@@ -48,23 +59,23 @@ WEEKDAY_DE = {
 }
 
 def format_de_datetime(local_dt: datetime) -> str:
-    \"\"\"Formatiert z. B.: 'Samstag, 25.10.2025 20:00 CET'.\"\"\"
+    """Formatiert z. B.: 'Samstag, 25.10.2025 20:00 CET'."""
     en = local_dt.strftime("%A")
     de = WEEKDAY_DE.get(en, en)
     return local_dt.strftime(f"%A, %d.%m.%Y %H:%M %Z").replace(en, de)
 
 def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
-    \"\"\"
+    """
     Google Calendar erwartet UTC im Format YYYYMMDDTHHMMSSZ/...
-    Ende ist Start + duration_hours (Standard 2h).
-    \"\"\"
+    Ende = Start + duration_hours (Standard 2h)
+    """
     end_utc = start_utc + timedelta(hours=duration_hours)
     fmt = "%Y%m%dT%H%M%SZ"
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
 
 def build_google_calendar_url(title: str, start_utc: datetime, location: str, description: str) -> str:
     base = "https://calendar.google.com/calendar/render?action=TEMPLATE"
-    text = "&text=" + quote_plus(title)
+    text = "&text=" + quote_plus(title or "")
     dates = "&dates=" + to_google_dates(start_utc)
     loc = "&location=" + quote_plus(location or "")
     details = "&details=" + quote_plus(description or "")
@@ -83,10 +94,11 @@ def is_valid_emoji(emoji, guild):
         return any(str(e) == emoji for e in guild.emojis)
     return True
 
-SLOT_PATTERN = re.compile(r"(<a?:\\w+:\\d+>|[^\\s:]+)\\s*:\\s*(\\d+)")
+# erlaubt: '<:Tank:123>:3' oder '⚔️:2' oder '⚔️ : 2'
+SLOT_PATTERN = re.compile(r"(<a?:\w+:\d+>|[^\s:]+)\s*:\s*(\d+)")
 
 def parse_slots(slots_str: str, guild: discord.Guild):
-    \"\"\"Akzeptiert: '⚔️:2 🛡️:1' oder '⚔️ : 2' oder '<:Tank:123>: 3'\"\"\"
+    """Akzeptiert: '⚔️:2 🛡️:1' oder '⚔️ : 2' oder '<:Tank:123>: 3'"""
     matches = SLOT_PATTERN.findall(slots_str or "")
     if not matches:
         return None
@@ -111,7 +123,10 @@ def format_event_text(event, guild):
 
 # ----------------- Strike-Through Utilities -----------------
 def extract_current_value(header: str, prefix_regex: str) -> str:
-    \"\"\"Holt den aktuell sichtbaren Wert (nach '~~alt~~ → neu').\"\"\"
+    """
+    Holt den aktuell sichtbaren Wert (nach einem evtl. bestehenden '~~alt~~ → neu').
+    prefix_regex Beispiel: r'^📍 \*\*Ort:\*\* '
+    """
     m = re.search(prefix_regex + r"(.*)$", header, re.M)
     if not m:
         return ""
@@ -122,12 +137,15 @@ def extract_current_value(header: str, prefix_regex: str) -> str:
     return val
 
 def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_value: str) -> str:
-    \"\"\"Ersetzt/ergänzt die Zeile mit 'prefix ~~alt~~ → neu'.\"\"\"
+    """
+    Ersetzt die komplette Zeile mit 'prefix_label ~~alt~~ → neu'.
+    Falls es schon eine Strike-Zeile gibt, wird nur der sichtbare Teil aktualisiert.
+    """
     line_regex = re.compile(rf"^{re.escape(prefix_label)} .*?$", re.M)
     if line_regex.search(header):
         def _sub(m):
             line = m.group(0)
-            m2 = re.search(r"~~(.*?)~~\\s*→\\s*(.*)", line)
+            m2 = re.search(r"~~(.*?)~~\s*→\s*(.*)", line)
             if m2:
                 current_new = m2.group(2).strip()
                 return f"{prefix_label} ~~{current_new}~~ → {new_value}"
@@ -135,6 +153,7 @@ def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_va
                 original = line.replace(prefix_label, "").strip()
                 return f"{prefix_label} ~~{original}~~ → {new_value}"
         return line_regex.sub(_sub, header)
+    # Zeile fehlt -> anhängen
     return header.rstrip() + f"\n{prefix_label} ~~{old_visible or '?'}~~ → {new_value}"
 
 async def update_event_message(message_id):
@@ -155,6 +174,7 @@ async def update_event_message(message_id):
 
 # ----------------- GitHub Speicherfunktionen -----------------
 def load_events():
+    """Lädt events.json aus dem GitHub-Repo."""
     repo = os.getenv("GITHUB_REPO")
     path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
     token = os.getenv("GITHUB_TOKEN")
@@ -184,6 +204,7 @@ def load_events():
     return {}
 
 def save_events():
+    """Speichert events.json im GitHub-Repo."""
     repo = os.getenv("GITHUB_REPO")
     path = os.getenv("GITHUB_FILE_PATH", "data/events.json")
     token = os.getenv("GITHUB_TOKEN")
@@ -261,27 +282,51 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
 
-# ----------------- /help -----------------
+# ----------------- /help (Embed) -----------------
 @bot.tree.command(name="help", description="Zeigt alle verfügbaren Befehle und Beispiele an")
 async def help_command(interaction: discord.Interaction):
-    help_text = (
-        "## 📖 **SlotBot Hilfe**\n"
-        "### 🆕 `/event`\n"
-        "Erstellt ein Event. Beispiel:\n"
-        "```\n/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"\n```\n"
-        "### ✏️ `/event_edit`\n"
-        "Bearbeite dein Event (nur Ersteller). Alte Werte werden ~~durchgestrichen~~ → neuer Wert.\n"
-        "```\n/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ slots:\"⚔️:2 🛡️:2\" anmerkung:\"10 Min früher treffen\"\n```\n"
-        "### ❌ `/event_delete`\n"
-        "```\n/event_delete\n```\n"
-        "— Hinweise —\n"
-        "- 🔔 10-Minuten-Reminder per DM\n"
-        "- ✨ Änderungen an Datum/Ort/Level zeigen den letzten alten Wert ~~durchgestrichen~~\n"
-        "- 🧵 Änderungen werden im Thread-Log dokumentiert (Auto-Unarchive)\n"
-        "- 🔤 Slots akzeptieren `⚔️:2`, `⚔️ : 2` oder `<:Tank:123>: 3`\n"
-        "- 📆 Google Kalender Button erscheint öffentlich unter dem Event"
+    embed = discord.Embed(
+        title="📖 SlotBot Hilfe",
+        description="Schnellüberblick über die verfügbaren Slash-Commands.",
+        color=0x5865F2
     )
-    await interaction.response.send_message(help_text, ephemeral=True)
+    embed.add_field(
+        name="🆕 /event",
+        value=(
+            "Erstellt ein Event.\n"
+            "**Beispiel:**\n"
+            "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 "
+            "level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="✏️ /event_edit",
+        value=(
+            "Bearbeite **dein** Event (nur Ersteller). Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt.\n"
+            "**Beispiel:**\n"
+            "`/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ slots:\"⚔️:2 🛡️:2\" anmerkung:\"10 Min früher treffen\"`"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="❌ /event_delete",
+        value="Löscht dein aktuelles Event im Channel. ` /event_delete `",
+        inline=False
+    )
+    embed.add_field(
+        name="ℹ️ Hinweise",
+        value=(
+            "• 🔔 10-Minuten-Reminder per DM\n"
+            "• 💾 Persistenz via GitHub (`data/events.json`)\n"
+            "• ✨ Änderungen (Datum/Ort/Level) zeigen **immer nur die letzte** alte Angabe\n"
+            "• 🧵 Änderungen werden im Thread-Log dokumentiert (Auto-Unarchive)\n"
+            "• 🔤 Slots akzeptieren `⚔️:2`, `⚔️ : 2` oder `<:Tank:123>: 3`\n"
+            "• 📆 Google Kalender Button erscheint öffentlich unter dem Event"
+        ),
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ----------------- /event -----------------
 @bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
@@ -356,14 +401,14 @@ async def event(interaction: discord.Interaction,
 
     # Öffentliche Kalender-URL (inkl. Beschreibung)
     description = (
-        f"Art: {art.value}\\n"
-        f"Zweck: {zweck}\\n"
-        f"Ort: {ort}\\n"
-        f"Datum/Zeit: {time_str}\\n"
-        f"Level: {level}\\n"
-        f"Stil: {stil.value}\\n"
-        + (f"Typ: {typ.value}\\n" if typ else "")
-        + (f"Gruppenlead: {gruppenlead}\\n" if gruppenlead else "")
+        f"Art: {art.value}\n"
+        f"Zweck: {zweck}\n"
+        f"Ort: {ort}\n"
+        f"Datum/Zeit: {time_str}\n"
+        f"Level: {level}\n"
+        f"Stil: {stil.value}\n"
+        + (f"Typ: {typ.value}\n" if typ else "")
+        + (f"Gruppenlead: {gruppenlead}\n" if gruppenlead else "")
         + (f"Anmerkung: {anmerkung}" if anmerkung else "")
     )
     gcal_url = build_google_calendar_url(
@@ -426,7 +471,6 @@ async def event_edit(interaction: discord.Interaction,
         return
 
     msg_id, ev = max(own, key=lambda x: x[0])
-    changed_fields = []
     thread_changes = []
 
     PREFIX_DATE = "🕒 **Datum/Zeit:**"
@@ -447,7 +491,6 @@ async def event_edit(interaction: discord.Interaction,
                 current_visible = format_de_datetime(old_local)
             ev["header"] = replace_with_struck(ev["header"], PREFIX_DATE, current_visible, new_str)
             ev["event_time"] = new_local.astimezone(pytz.utc)
-            changed_fields.append("Datum/Zeit")
             thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
             await interaction.response.send_message("❌ Fehler im Datumsformat (DD.MM.YYYY / HH:MM).", ephemeral=True)
@@ -460,7 +503,6 @@ async def event_edit(interaction: discord.Interaction,
             m = re.search(rf"^{re.escape(PREFIX_ORG)} (.+)$", ev["header"], re.M)
             current_visible = m.group(1) if m else "?"
         ev["header"] = replace_with_struck(ev["header"], PREFIX_ORG, current_visible, ort)
-        changed_fields.append("Ort")
         thread_changes.append(f"Ort: ~~{current_visible}~~ → {ort}")
 
     # Level
@@ -470,7 +512,6 @@ async def event_edit(interaction: discord.Interaction,
             m = re.search(rf"^{re.escape(PREFIX_LEVEL)} (.+)$", ev["header"], re.M)
             current_visible = m.group(1) if m else "?"
         ev["header"] = replace_with_struck(ev["header"], PREFIX_LEVEL, current_visible, level)
-        changed_fields.append("Level")
         thread_changes.append(f"Level: ~~{current_visible}~~ → {level}")
 
     # Anmerkung (ohne Strike)
@@ -479,7 +520,6 @@ async def event_edit(interaction: discord.Interaction,
             ev["header"] = re.sub(r"📝 \*\*Anmerkung:\*\* .+", f"📝 **Anmerkung:** {anmerkung}", ev["header"])
         else:
             ev["header"] += f"📝 **Anmerkung:** {anmerkung}\n"
-        changed_fields.append("Anmerkung")
         thread_changes.append("Anmerkung aktualisiert")
 
     # Slots
@@ -501,7 +541,6 @@ async def event_edit(interaction: discord.Interaction,
                 await msg.add_reaction(emoji)
             except Exception:
                 pass
-        changed_fields.append("Slots")
         thread_changes.append("Slots angepasst")
 
     # Nachricht & Speicherung
@@ -513,7 +552,6 @@ async def event_edit(interaction: discord.Interaction,
     thread_id = ev.get("thread_id")
     thread = interaction.guild.get_channel(thread_id) if thread_id else None
     if not thread:
-        # Versuche, anhand der Originalnachricht einen neuen Thread zu erstellen
         try:
             channel = interaction.guild.get_channel(ev["channel_id"])
             base_msg = await channel.fetch_message(msg_id)
