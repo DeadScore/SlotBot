@@ -2,9 +2,18 @@ services:
   - type: web
     name: discord-bot
     env: python
+    region: frankfurt
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
     autoDeploy: true
     envVars:
       - key: DISCORD_TOKEN
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: DeadScore/SlotBot
+      - key: GITHUB_FILE_PATH
+        value: data/events.json
+      - key: PUBLIC_BASE_URL
         sync: false
