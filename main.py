@@ -890,6 +890,9 @@ async def event_edit(
     cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
     """
+
+    # Interaktion sofort deferen, um Timeout zu vermeiden
+    await interaction.response.defer(ephemeral=True)
     Bearbeitet das zuletzt geplante Event des Aufrufers auf diesem Server.
     Unterstützt: Datum, Zeit, Ort, Level, Anmerkung, Slots, Cleanup-Stunden.
     """
@@ -902,7 +905,7 @@ async def event_edit(
         and ev.get("guild_id") == interaction.guild.id
     ]
     if not own:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ Ich finde aktuell kein Event von dir auf diesem Server.",
             ephemeral=True,
         )
@@ -940,7 +943,7 @@ async def event_edit(
             ev["event_time"] = new_local.astimezone(pytz.utc)
             thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Fehler im Datumsformat (DD.MM.YYYY / HH:MM).",
                 ephemeral=True,
             )
@@ -980,7 +983,7 @@ async def event_edit(
     if slots:
         parsed = parse_slots(slots, interaction.guild)
         if parsed is None or isinstance(parsed, str):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Ungültige Slots. Beispiel: ⚔️:2 🛡️:1",
                 ephemeral=True,
             )
@@ -998,7 +1001,7 @@ async def event_edit(
                 msg_id,
                 "Fehler: Eventnachricht nicht gefunden (Slots neu setzen).",
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⚠️ Konnte die Eventnachricht nicht finden (Slots).",
                 ephemeral=True,
             )
@@ -1032,7 +1035,7 @@ async def event_edit(
     # Eventnachricht + Speicher aktualisieren
     await update_event_message(msg_id)
     await safe_save()
-    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
 
     # Thread-Log schreiben
     if thread_changes:
@@ -1041,7 +1044,6 @@ async def event_edit(
         await post_event_update_log(ev, guild, interaction.user.mention, changes, msg_id)
         if any(s.startswith("Datum/Zeit:") for s in thread_changes):
             await post_calendar_links(ev, guild, msg_id)
-
 
 
 # ----------------- /event_delete -----------------
