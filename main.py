@@ -1,12 +1,10 @@
-# main.py — SlotBot v4.4.1 
-# Changelog v4.4.1:
+# main.py — SlotBot v4.3.3
+# Changelog v4.3.3:
 # - Toleranter Slot-Parser (beliebig viele Leerzeichen rund um ":")
 # - Kalenderlinks nebeneinander im Thread
 # - /events Alias zu /event_list
 # - Thread-Logs bei An-/Abmeldung (Reaktionen)
 # - Neuer Befehl: /event_info (zeigt dein aktuelles Event als Embed)
-# - NEU: Pro-Event Auto-Cleanup per Stunden (Default 1h, optional überschreibbar)
-# - NEU: Schöner Event-Post als Embed + hübsche ephemere Erfolgsmeldung
 #
 # Features:
 # - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help
@@ -19,7 +17,6 @@
 # - Emoji-Fix: Problematische Emojis werden übersprungen; Hinweis im Thread
 # - Creator-Fix: Edit/Delete findet Events serverweit des Erstellers (nicht nur Channel)
 # - Kalenderlinks NUR im Thread: Google + Apple (.ics-Anhang, oder Link via PUBLIC_BASE_URL)
-# - Pro-Event Auto-Cleanup: Standard 1h nach Start (optional anpassbar über /event oder /event_edit)
 #
 # Repo-Default (Fallback): DeadScore/SlotBot  — kann per Env überschrieben werden.
 #
@@ -41,7 +38,6 @@ import base64
 import requests
 from datetime import datetime, timedelta
 from threading import Thread
-from typing import Optional
 import pytz
 from urllib.parse import quote_plus
 
@@ -58,7 +54,6 @@ if not TOKEN:
 
 CUSTOM_EMOJI_REGEX = r"<a?:\w+:\d+>"
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
-DEFAULT_CLEANUP_HOURS = 1  # Standardmäßig 1h nach Eventstart löschen (falls nicht überschrieben)
 
 # GitHub
 GITHUB_REPO = os.getenv("GITHUB_REPO", "DeadScore/SlotBot")
@@ -103,20 +98,6 @@ def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
     fmt = "%Y%m%dT%H%M%SZ"
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
 
-# ---- Tolerant time parsing for edits (accepts '22:15', '22.15', '22', '22 Uhr') ----
-def parse_time_tolerant(s: str, fallback_hhmm: str) -> str:
-    if not s:
-        return fallback_hhmm
-    s = s.strip().lower().replace("uhr", "").strip()
-    s = s.replace(".", ":")
-    m = re.match(r"^(\d{1,2})(?::?(\d{2}))?$", s)
-    if not m:
-        return fallback_hhmm
-    h = int(m.group(1))
-    mnt = int(m.group(2)) if m.group(2) else 0
-    if h < 0 or h > 23 or mnt < 0 or mnt > 59:
-        return fallback_hhmm
-    return f"{h:02d}:{mnt:02d}"
 
 def build_google_calendar_url(title: str, start_utc: datetime, location: str, description: str) -> str:
     base = "https://calendar.google.com/calendar/render?action=TEMPLATE"
@@ -195,73 +176,34 @@ def format_event_text(event, guild: discord.Guild):
     return text
 
 
-# 🆕 Neue Helferfunktionen für hübsche Embeds
-def format_slots_for_embed(event, guild: discord.Guild) -> str:
-    """Schöne Slotliste ohne Überschrift für Embeds."""
-    lines = []
-    for emoji, slot in event["slots"].items():
-        main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
-        wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
-        line = f"{emoji} **({len(main_users)}/{slot['limit']})**: " + (", ".join(main_users) if main_users else "-")
-        if wait_users:
-            line += "\n   ⏳ **Warteliste:** " + ", ".join(wait_users)
-        lines.append(line)
-    return "\n".join(lines) if lines else "—"
+# ----------------- Strike-Through Utilities -----------------
+def extract_current_value(header: str, prefix_regex: str) -> str:
+    m = re.search(prefix_regex + r"(.*)$", header, re.M)
+    if not m:
+        return ""
+    val = m.group(1).strip()
+    if "~~" in val and "→" in val:
+        parts = val.split("→", 1)
+        return parts[1].strip()
+    return val
 
 
-def color_for_art(art_value: str) -> int:
-    m = (art_value or "").lower()
-    if m == "pve":
-        return 0x2ECC71
-    if m == "pvp":
-        return 0xE74C3C
-    return 0x3498DB  # PVX / default
+def replace_with_struck(header: str, prefix_label: str, old_visible: str, new_value: str) -> str:
+    line_regex = re.compile(rf"^{re.escape(prefix_label)} .*?$", re.M)
+    if line_regex.search(header):
 
+        def _sub(m):
+            line = m.group(0)
+            m2 = re.search(r"~~(.*?)~~\s*→\s*(.*)", line)
+            if m2:
+                current_new = m2.group(2).strip()
+                return f"{prefix_label} ~~{current_new}~~ → {new_value}"
+            else:
+                original = line.replace(prefix_label, "").strip()
+                return f"{prefix_label} ~~{original}~~ → {new_value}"
 
-def build_event_embed(zweck: str, ort: str, time_str: str, level: str, stil_value: str, art_value: str, slot_dict: dict, guild: discord.Guild, cleanup_hours: int) -> discord.Embed:
-    embed = discord.Embed(
-        title=zweck,
-        description=(
-            f"**📍 Ort:** {ort}\n"
-            f"**🕒 Zeit:** {time_str}\n"
-            f"**⚔️ Level:** {level}\n"
-            f"**💬 Stil:** {stil_value}"
-        ),
-        color=color_for_art(art_value),
-    )
-    embed.set_author(name=f"{art_value} – Neue Gruppensuche!")
-    embed.add_field(name="🎟️ Slots", value=format_slots_for_embed({"slots": slot_dict}, guild), inline=False)
-    embed.set_footer(text=f"Automatisches Löschen: {cleanup_hours}h nach Start")
-    return embed
-
-
-def build_event_embed_from_ev(ev: dict, guild: discord.Guild) -> discord.Embed:
-    # Parse values from header
-    header = ev.get("header", "")
-    def rex(label):
-        m = re.search(rf"^{label} (.+)$", header, re.M)
-        return m.group(1).strip() if m else ""
-    art_value = rex("🗡️ \\*\\*Art:\\*\\*")
-    zweck = rex("🎯 \\*\\*Zweck:\\*\\*")
-    ort = rex("📍 \\*\\*Ort:\\*\\*")
-    level = rex("⚔️ \\*\\*Levelbereich:\\*\\*")
-    stil_value = rex("💬 \\*\\*Stil:\\*\\*")
-    time_str = rex("🕒 \\*\\*Datum/Zeit:\\*\\*")
-    embed = discord.Embed(
-        title=zweck or ev.get("title", "Event"),
-        description=(
-            f"**📍 Ort:** {ort}\n"
-            f"**🕒 Zeit:** {time_str}\n"
-            f"**⚔️ Level:** {level}\n"
-            f"**💬 Stil:** {stil_value}"
-        ),
-        color=color_for_art(art_value or ""),
-    )
-    embed.set_author(name=f"{(art_value or 'Event')} – Update")
-    embed.add_field(name="🎟️ Slots", value=format_slots_for_embed(ev, guild), inline=False)
-    cleanup_hours = int(ev.get("cleanup_hours", 1))
-    embed.set_footer(text=f"Automatisches Löschen: {cleanup_hours}h nach Start")
-    return embed
+        return line_regex.sub(_sub, header)
+    return header.rstrip() + f"\n{prefix_label} ~~{old_visible or '?'}~~ → {new_value}"
 
 
 async def update_event_message(message_id: int):
@@ -277,11 +219,7 @@ async def update_event_message(message_id: int):
     for _ in range(3):
         try:
             msg = await channel.fetch_message(int(message_id))
-            try:
-                embed = build_event_embed_from_ev(ev, guild)
-                await msg.edit(embed=embed)
-            except Exception:
-                await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
+            await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
             return
         except Exception:
             await asyncio.sleep(1)
@@ -431,62 +369,6 @@ async def reminder_task():
         await asyncio.sleep(60)
 
 
-# ----------------- Auto-Cleanup (pro Event, Standard 1h) -----------------
-async def cleanup_task():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        to_cleanup: list[tuple[int, dict]] = []
-
-        # Kandidaten sammeln
-        for msg_id, ev in list(active_events.items()):
-            event_time = ev.get("event_time")
-            if not event_time:
-                continue
-            hours = int(ev.get("cleanup_hours", DEFAULT_CLEANUP_HOURS))
-            if hours < 1:
-                hours = 1
-            if now >= event_time + timedelta(hours=hours):
-                to_cleanup.append((msg_id, ev))
-
-        # Aufräumen
-        for msg_id, ev in to_cleanup:
-            guild = bot.get_guild(ev.get("guild_id"))
-            if not guild:
-                active_events.pop(msg_id, None)
-                continue
-
-            # Event-Message löschen
-            channel = guild.get_channel(ev.get("channel_id"))
-            if channel:
-                try:
-                    msg = await channel.fetch_message(msg_id)
-                    await msg.delete()
-                except Exception:
-                    # Message evtl. schon manuell gelöscht – ignorieren
-                    pass
-
-            # Thread löschen (falls vorhanden)
-            thread_id = ev.get("thread_id")
-            if thread_id:
-                thread = guild.get_channel(thread_id)
-                if thread:
-                    try:
-                        await thread.delete()
-                    except Exception:
-                        pass
-
-            # Aus Speicher entfernen
-            active_events.pop(msg_id, None)
-
-        # Nur speichern, wenn wirklich was geändert wurde
-        if to_cleanup:
-            await safe_save()
-
-        # Regelmäßig prüfen
-        await asyncio.sleep(300)
-
-
 # ----------------- Thread Helper & Logging -----------------
 async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id: int):
     thread = None
@@ -528,12 +410,7 @@ async def post_event_update_log(ev: dict, guild: discord.Guild, editor_mention: 
         return
     for _ in range(3):
         try:
-            embed = discord.Embed(
-                description=f"✏️ **{editor_mention}** hat das Event bearbeitet\n{changes_text}",
-                color=0xF1C40F,
-                timestamp=datetime.utcnow()
-            )
-            await thread.send(embed=embed)
+            await thread.send(f"✏️ **{editor_mention}** hat das Event bearbeitet ({changes_text}).")
             return
         except Exception:
             await asyncio.sleep(1)
@@ -645,10 +522,7 @@ async def on_ready():
     active_events.clear()
     active_events.update(loaded)
     print(f"📂 Aktive Events im Speicher: {len(active_events)}")
-
     bot.loop.create_task(reminder_task())
-    bot.loop.create_task(cleanup_task())  # Auto-Cleanup starten
-
     try:
         await bot.tree.sync()
         print("📂 Slash Commands synchronisiert")
@@ -662,24 +536,21 @@ async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📖 SlotBot – Ausführliche Hilfe",
         description=(
-            "Der SlotBot hilft dir, Events zu erstellen, zu verwalten und sauber zu organisieren.\n"
-            "Event-Posts werden **als Embeds** gepostet (farbig je nach Art), Kalenderlinks landen im **Thread**."
+            "Der SlotBot hilft dir, Events zu erstellen, zu verwalten und übersichtlich zu halten.\n"
+            "Unten findest du alle Befehle mit Beispielen und Hinweisen."
         ),
         color=0x5865F2,
     )
     embed.add_field(
         name="🆕 /event",
         value=(
-            "**Beschreibung:** Erstellt ein neues Event mit Slots, **Embed-Post** und Thread.\n"
+            "**Beschreibung:** Erstellt ein neues Event mit Slots und Thread.\n"
             "**Pflichtfelder:** `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
-            "**Optional:** `cleanup_hours` (Standard **1h**), `typ`, `gruppenlead`, `anmerkung`\n"
-            "**Hinweise:**\n"
-            "• **Slots**: tolerant – beliebig viele Leerzeichen um `:` erlaubt (z. B. `⚔️  :   3`).\n"
-            "• **Cleanup**: wird **nicht im Post** angezeigt; der Embed-Footer nennt nur die Zeit („Automatisches Löschen: Xh“).\n"
-            "• **Farben**: PvE = Grün, PvP = Rot, PVX = Blau.\n"
+            "**Optional:** `typ`, `gruppenlead`, `anmerkung`\n"
+            "**Datum/Zeit:** Wochentag wird automatisch angehängt.\n"
             "**Beispiel:**\n"
             "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 level:61+ stil:\"Organisiert\" "
-            "slots:\"⚔️:3 🛡️:1 💉:2\" cleanup_hours:24 typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
+            "slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
         ),
         inline=False,
     )
@@ -687,25 +558,31 @@ async def help_command(interaction: discord.Interaction):
         name="✏️ /event_edit",
         value=(
             "**Beschreibung:** Bearbeitet **dein** Event (nur Ersteller).\n"
-            "**Unterstützt:** `datum`, `zeit`, `ort`, `level`, `anmerkung`, `slots`, `cleanup_hours`\n"
-            "**Anzeige:** Alte Werte werden im Header `~~durchgestrichen~~ → neu` vermerkt (nur letzte Änderung)."
+            "**Unterstützt:** `datum`, `zeit`, `ort`, `level`, `anmerkung`, `slots`\n"
+            "**Anzeige:** Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt (nur letzte Änderung).\n"
+            "**Beispiel:**\n"
+            "`/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ slots:\"⚔️:2 🛡️:2\" anmerkung:\"10 Min früher treffen\"`"
         ),
         inline=False,
     )
     embed.add_field(
         name="🗑️ /event_delete",
-        value="**Beschreibung:** Löscht **dein** aktuelles Event (inkl. Thread).",
+        value=(
+            "**Beschreibung:** Löscht **dein** aktuelles Event (nur Ersteller)."
+        ),
         inline=False,
     )
     embed.add_field(
         name="🗓️ /events",
-        value="**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link.",
+        value=(
+            "**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link."
+        ),
         inline=False,
     )
     embed.add_field(
         name="ℹ️ /event_info",
         value=(
-            "**Beschreibung:** Zeigt Details zu **deinem aktuellen Event** als Embed.\n"
+            "**Beschreibung:** Zeigt Details zu **deinem aktuellen Event** auf diesem Server als Embed.\n"
             "Enthält Basisdaten, Slots (Hauptslot + Warteliste) und einen Direktlink zur Event-Nachricht."
         ),
         inline=False,
@@ -721,6 +598,9 @@ async def help_command(interaction: discord.Interaction):
         inline=False,
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ----------------- /event -----------------
 @bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/PVX)",
@@ -731,7 +611,6 @@ async def help_command(interaction: discord.Interaction):
     level="Levelbereich",
     stil="Gemütlich oder Organisiert",
     slots="Slots (z. B. ⚔️:2 🛡️:1)",
-    cleanup_hours="Optional: In wie vielen Stunden nach Start wird das Event automatisch gelöscht (Default 1)",
     typ="Optional: Gruppe oder Raid",
     gruppenlead="Optional: Gruppenleiter",
     anmerkung="Optional: Freitext",
@@ -751,7 +630,6 @@ async def event(
     level: str,
     stil: app_commands.Choice[str],
     slots: str,
-    cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
     typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
     anmerkung: str = None,
@@ -779,7 +657,7 @@ async def event(
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Header bauen (Cleanup NICHT posten)
+    # Header bauen
     time_str = format_de_datetime(local_dt)
     header = (
         f"📣 **@here — Neue Gruppensuche!**\n\n"
@@ -797,22 +675,13 @@ async def event(
     if anmerkung:
         header += f"📝 **Anmerkung:** {anmerkung}\n"
 
-    # Ephemere hübsche Erfolgsmeldung
-    success = discord.Embed(
-        title="✅ Event erfolgreich erstellt!",
-        description=f"**{zweck}** am **{datum} um {zeit}** wurde angelegt.",
-        color=0x2ECC71
-    )
-    success.add_field(name="Löschzeit", value=f"{(int(cleanup_hours) if cleanup_hours else 1)} Stunden nach Start", inline=True)
-    await interaction.response.send_message(embed=success, ephemeral=True)
+    await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
 
-    # Nachricht als Embed absenden
+    # Nachricht absenden
     try:
-        embed = build_event_embed(
-            zweck, ort, time_str, level, stil.value, art.value,
-            slot_dict, interaction.guild, int(cleanup_hours) if cleanup_hours else DEFAULT_CLEANUP_HOURS
+        msg = await interaction.channel.send(
+            header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild)
         )
-        msg = await interaction.channel.send(embed=embed)
     except discord.errors.Forbidden:
         await interaction.followup.send("❌ Ich darf hier keine Nachrichten senden.", ephemeral=True)
         return
@@ -863,13 +732,12 @@ async def event(
         "creator_id": interaction.user.id,
         "event_time": utc_dt,
         "thread_id": thread_id,
-        "cleanup_hours": int(cleanup_hours) if cleanup_hours else DEFAULT_CLEANUP_HOURS,
     }
     await safe_save()
 
 
 # ----------------- /event_edit -----------------
-@bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung, Cleanup)")
+@bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
 @app_commands.describe(
     datum="Neues Datum (DD.MM.YYYY)",
     zeit="Neue Zeit (HH:MM)",
@@ -877,7 +745,6 @@ async def event(
     level="Neuer Levelbereich",
     anmerkung="Neue Anmerkung",
     slots="Neue Slots (z. B. ⚔️:3 🛡️:2)",
-    cleanup_hours="Neue Auto-Cleanup-Zeit in Stunden (z. B. 24)",
 )
 async def event_edit(
     interaction: discord.Interaction,
@@ -887,16 +754,7 @@ async def event_edit(
     level: str = None,
     anmerkung: str = None,
     slots: str = None,
-    cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
-    """
-    Bearbeitet das zuletzt geplante Event des Aufrufers auf diesem Server.
-    Unterstützt: Datum, Zeit, Ort, Level, Anmerkung, Slots, Cleanup-Stunden.
-    """
-    # Interaktion sofort deferen, um Timeout zu vermeiden
-    await interaction.response.defer(ephemeral=True)
-
-    # Eigene Events auf diesem Server suchen (Creator-Fix: serverweit, nicht nur Channel)
     own = [
         (mid, ev)
         for mid, ev in active_events.items()
@@ -904,13 +762,12 @@ async def event_edit(
         and ev.get("guild_id") == interaction.guild.id
     ]
     if not own:
-        await interaction.followup.send(
+        await interaction.response.send_message(
             "❌ Ich finde aktuell kein Event von dir auf diesem Server.",
             ephemeral=True,
         )
         return
 
-    # Neuestes Event nach event_time wählen
     msg_id, ev = max(
         own,
         key=lambda x: x[1].get("event_time", datetime.min.replace(tzinfo=pytz.utc)),
@@ -925,12 +782,9 @@ async def event_edit(
     if datum or zeit:
         old_local = ev["event_time"].astimezone(BERLIN_TZ)
         try:
-            # tolerant time parsing (accepts '22:15', '22.15', '22', '22 Uhr')
-            _fallback_time = old_local.strftime('%H:%M')
-            _time_str = parse_time_tolerant(zeit, _fallback_time) if zeit else _fallback_time
             new_local = BERLIN_TZ.localize(
                 datetime.strptime(
-                    f"{datum or old_local.strftime('%d.%m.%Y')} {_time_str}",
+                    f"{datum or old_local.strftime('%d.%m.%Y')} {zeit or old_local.strftime('%H:%M')}",
                     "%d.%m.%Y %H:%M",
                 )
             )
@@ -942,7 +796,7 @@ async def event_edit(
             ev["event_time"] = new_local.astimezone(pytz.utc)
             thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ Fehler im Datumsformat (DD.MM.YYYY / HH:MM).",
                 ephemeral=True,
             )
@@ -982,7 +836,7 @@ async def event_edit(
     if slots:
         parsed = parse_slots(slots, interaction.guild)
         if parsed is None or isinstance(parsed, str):
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ Ungültige Slots. Beispiel: ⚔️:2 🛡️:1",
                 ephemeral=True,
             )
@@ -1000,7 +854,7 @@ async def event_edit(
                 msg_id,
                 "Fehler: Eventnachricht nicht gefunden (Slots neu setzen).",
             )
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "⚠️ Konnte die Eventnachricht nicht finden (Slots).",
                 ephemeral=True,
             )
@@ -1026,17 +880,10 @@ async def event_edit(
                     + ", ".join(failed_emojis)
                 )
 
-    # Cleanup Hours
-    if cleanup_hours is not None:
-        ev["cleanup_hours"] = int(cleanup_hours)
-        thread_changes.append(f"Cleanup auf {int(cleanup_hours)}h geändert")
-
-    # Eventnachricht + Speicher aktualisieren
     await update_event_message(msg_id)
     await safe_save()
-    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
-    # Thread-Log schreiben
     if thread_changes:
         guild = interaction.guild
         changes = ", ".join(thread_changes)
