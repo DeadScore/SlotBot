@@ -103,6 +103,20 @@ def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
     fmt = "%Y%m%dT%H%M%SZ"
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
 
+# ---- Tolerant time parsing for edits (accepts '22:15', '22.15', '22', '22 Uhr') ----
+def parse_time_tolerant(s: str, fallback_hhmm: str) -> str:
+    if not s:
+        return fallback_hhmm
+    s = s.strip().lower().replace("uhr", "").strip()
+    s = s.replace(".", ":")
+    m = re.match(r"^(\d{1,2})(?::?(\d{2}))?$", s)
+    if not m:
+        return fallback_hhmm
+    h = int(m.group(1))
+    mnt = int(m.group(2)) if m.group(2) else 0
+    if h < 0 or h > 23 or mnt < 0 or mnt > 59:
+        return fallback_hhmm
+    return f"{h:02d}:{mnt:02d}"
 
 def build_google_calendar_url(title: str, start_utc: datetime, location: str, description: str) -> str:
     base = "https://calendar.google.com/calendar/render?action=TEMPLATE"
@@ -875,6 +889,9 @@ async def event_edit(
     slots: str = None,
     cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
+    # Defer early to avoid interaction timeout
+    await interaction.response.defer(ephemeral=True)
+
     own = [
         (mid, ev)
         for mid, ev in active_events.items()
@@ -902,9 +919,12 @@ async def event_edit(
     if datum or zeit:
         old_local = ev["event_time"].astimezone(BERLIN_TZ)
         try:
+            # tolerant time parsing (accepts '22:15', '22.15', '22', '22 Uhr')
+            _fallback_time = old_local.strftime('%H:%M')
+            _time_str = parse_time_tolerant(zeit, _fallback_time) if zeit else _fallback_time
             new_local = BERLIN_TZ.localize(
                 datetime.strptime(
-                    f"{datum or old_local.strftime('%d.%m.%Y')} {zeit or old_local.strftime('%H:%M')}",
+                    f"{datum or old_local.strftime('%d.%m.%Y')} {_time_str}",
                     "%d.%m.%Y %H:%M",
                 )
             )
@@ -1007,7 +1027,7 @@ async def event_edit(
 
     await update_event_message(msg_id)
     await safe_save()
-    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
 
     if thread_changes:
         guild = interaction.guild
