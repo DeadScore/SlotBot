@@ -1,10 +1,13 @@
-# main.py — SlotBot v4.3.3
+# main.py — SlotBot v4.3.3 (stabiler Reset + tolerantes /event_edit-Zeitformat)
 # Changelog v4.3.3:
 # - Toleranter Slot-Parser (beliebig viele Leerzeichen rund um ":")
 # - Kalenderlinks nebeneinander im Thread
 # - /events Alias zu /event_list
 # - Thread-Logs bei An-/Abmeldung (Reaktionen)
 # - Neuer Befehl: /event_info (zeigt dein aktuelles Event als Embed)
+#
+# Zusatz in dieser Version:
+# - /event_edit: toleranter Zeit-Parser (22, 22.15, 22:15, 22 Uhr werden akzeptiert)
 #
 # Features:
 # - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help
@@ -22,10 +25,10 @@
 #
 # ENV Variablen (Render > Environment):
 # - DISCORD_TOKEN           (required)
-# - GITHUB_TOKEN           (required, scope: repo)
-# - GITHUB_REPO            (optional, default: DeadScore/SlotBot)
-# - GITHUB_FILE_PATH       (optional, default: data/events.json)
-# - PUBLIC_BASE_URL        (optional, e.g. https://slotbot-xxxx.onrender.com)  # für klickbaren ICS-Link
+# - GITHUB_TOKEN            (required, scope: repo)
+# - GITHUB_REPO             (optional, default: DeadScore/SlotBot)
+# - GITHUB_FILE_PATH        (optional, default: data/events.json)
+# - PUBLIC_BASE_URL         (optional, e.g. https://slotbot-xxxx.onrender.com)  # für klickbaren ICS-Link
 #
 # Python >= 3.9
 
@@ -38,6 +41,7 @@ import base64
 import requests
 from datetime import datetime, timedelta
 from threading import Thread
+
 import pytz
 from urllib.parse import quote_plus
 
@@ -78,7 +82,7 @@ SAVE_LOCK = asyncio.Lock()
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
     "Monday": "Montag",
-    "Tuesday": "Dienstag",
+    "Tuesday": "Dienstay",
     "Wednesday": "Mittwoch",
     "Thursday": "Donnerstag",
     "Friday": "Freitag",
@@ -97,6 +101,26 @@ def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
     end_utc = start_utc + timedelta(hours=duration_hours)
     fmt = "%Y%m%dT%H%M%SZ"
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
+
+
+# ---- Toleranter Zeitparser für /event_edit (22, 22.15, 22:15, 22 Uhr) ----
+def parse_time_tolerant(s: str, fallback_hhmm: str) -> str:
+    """
+    Nimmt Eingaben wie "22", "22 Uhr", "22.15", "22:15" und normalisiert sie zu "HH:MM".
+    Wenn nichts passt, wird fallback_hhmm zurückgegeben.
+    """
+    if not s:
+        return fallback_hhmm
+    s = s.strip().lower().replace("uhr", "").strip()
+    s = s.replace(".", ":")
+    m = re.match(r"^(\d{1,2})(?::?(\d{2}))?$", s)
+    if not m:
+        return fallback_hhmm
+    h = int(m.group(1))
+    mnt = int(m.group(2)) if m.group(2) else 0
+    if h < 0 or h > 23 or mnt < 0 or mnt > 59:
+        return fallback_hhmm
+    return f"{h:02d}:{mnt:02d}"
 
 
 def build_google_calendar_url(title: str, start_utc: datetime, location: str, description: str) -> str:
@@ -740,7 +764,7 @@ async def event(
 @bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
 @app_commands.describe(
     datum="Neues Datum (DD.MM.YYYY)",
-    zeit="Neue Zeit (HH:MM)",
+    zeit="Neue Zeit (HH:MM oder z. B. '22 Uhr')",
     ort="Neuer Ort",
     level="Neuer Levelbereich",
     anmerkung="Neue Anmerkung",
@@ -782,9 +806,12 @@ async def event_edit(
     if datum or zeit:
         old_local = ev["event_time"].astimezone(BERLIN_TZ)
         try:
+            # toleranter Zeit-Parser
+            fallback_time = old_local.strftime("%H:%M")
+            time_str = parse_time_tolerant(zeit, fallback_time) if zeit else fallback_time
             new_local = BERLIN_TZ.localize(
                 datetime.strptime(
-                    f"{datum or old_local.strftime('%d.%m.%Y')} {zeit or old_local.strftime('%H:%M')}",
+                    f"{datum or old_local.strftime('%d.%m.%Y')} {time_str}",
                     "%d.%m.%Y %H:%M",
                 )
             )
