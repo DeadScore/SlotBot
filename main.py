@@ -1,5 +1,5 @@
-# main.py — SlotBot v4.3.3 
-# Changelog v4.3.3:
+# main.py — SlotBot v4.4 
+# Changelog v4.4:
 # - Toleranter Slot-Parser (beliebig viele Leerzeichen rund um ":")
 # - Kalenderlinks nebeneinander im Thread
 # - /events Alias zu /event_list
@@ -169,6 +169,72 @@ def parse_slots(slots_str: str, guild: discord.Guild):
 
 
 def format_event_text(event, guild: discord.Guild):
+def format_slots_for_embed(event, guild: discord.Guild) -> str:
+    """Schöne Slotliste ohne Überschrift für Embeds."""
+    lines = []
+    for emoji, slot in event["slots"].items():
+        main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
+        wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
+        line = f"{emoji} **({len(main_users)}/{slot['limit']})**: " + (", ".join(main_users) if main_users else "-")
+        if wait_users:
+            line += "\n   ⏳ **Warteliste:** " + ", ".join(wait_users)
+        lines.append(line)
+    return "\n".join(lines) if lines else "—"
+
+def color_for_art(art_value: str) -> int:
+    m = (art_value or "").lower()
+    if m == "pve":
+        return 0x2ECC71
+    if m == "pvp":
+        return 0xE74C3C
+    return 0x3498DB  # PVX / default
+
+def build_event_embed(zweck: str, ort: str, time_str: str, level: str, stil_value: str, art_value: str, slot_dict: dict, guild: discord.Guild, cleanup_hours: int) -> discord.Embed:
+    embed = discord.Embed(
+        title=zweck,
+        description=(
+            f"**📍 Ort:** {ort}\n"
+            f"**🕒 Zeit:** {time_str}\n"
+            f"**⚔️ Level:** {level}\n"
+            f"**💬 Stil:** {stil_value}"
+        ),
+        color=color_for_art(art_value),
+    )
+    embed.set_author(name=f"{art_value} – Neue Gruppensuche!")
+    embed.add_field(name="🎟️ Slots", value=format_slots_for_embed({"slots": slot_dict}, guild), inline=False)
+    embed.set_footer(text=f"Automatisches Löschen: {cleanup_hours}h nach Start")
+    return embed
+
+def build_event_embed_from_ev(ev: dict, guild: discord.Guild) -> discord.Embed:
+    # Parse values from header
+    header = ev.get("header", "")
+    def rex(label):
+        import re
+        m = re.search(rf"^{label} (.+)$", header, re.M)
+        return m.group(1).strip() if m else ""
+    art_value = rex("🗡️ \\*\\*Art:\\*\\*")
+    zweck = rex("🎯 \\*\\*Zweck:\\*\\*")
+    ort = rex("📍 \\*\\*Ort:\\*\\*")
+    level = rex("⚔️ \\*\\*Levelbereich:\\*\\*")
+    stil_value = rex("💬 \\*\\*Stil:\\*\\*")
+    time_str = rex("🕒 \\*\\*Datum/Zeit:\\*\\*")
+    # Build description (time_str is already localized string)
+    embed = discord.Embed(
+        title=zweck or ev.get("title", "Event"),
+        description=(
+            f"**📍 Ort:** {ort}\n"
+            f"**🕒 Zeit:** {time_str}\n"
+            f"**⚔️ Level:** {level}\n"
+            f"**💬 Stil:** {stil_value}"
+        ),
+        color=color_for_art(art_value or ""),
+    )
+    embed.set_author(name=f"{(art_value or 'Event')} – Update")
+    embed.add_field(name="🎟️ Slots", value=format_slots_for_embed(ev, guild), inline=False)
+    cleanup_hours = int(ev.get("cleanup_hours", 1))
+    embed.set_footer(text=f"Automatisches Löschen: {cleanup_hours}h nach Start")
+    return embed
+
     text = "**📋 Eventübersicht:**\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
@@ -223,6 +289,11 @@ async def update_event_message(message_id: int):
     for _ in range(3):
         try:
             msg = await channel.fetch_message(int(message_id))
+            try:
+            embed = build_event_embed_from_ev(ev, guild)
+            await msg.edit(embed=embed)
+        except Exception:
+            # Fallback: edit content if embed fails for any reason
             await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
             return
         except Exception:
@@ -738,13 +809,14 @@ async def event(
     if anmerkung:
         header += f"📝 **Anmerkung:** {anmerkung}\n"
 
-    await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
+    success = discord.Embed(title="✅ Event erfolgreich erstellt!", description=f"**{zweck}** am **{datum} um {zeit}** wurde angelegt.", color=0x2ECC71)
+    success.add_field(name="Löschzeit", value=f"{(cleanup_hours or 1)} Stunden nach Start", inline=True)
+    await interaction.response.send_message(embed=success, ephemeral=True)
 
     # Nachricht absenden
     try:
-        msg = await interaction.channel.send(
-            header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild)
-        )
+        embed = build_event_embed(zweck, ort, time_str, level, stil.value, art.value, slot_dict, interaction.guild, int(cleanup_hours) if cleanup_hours else DEFAULT_CLEANUP_HOURS)
+        msg = await interaction.channel.send(embed=embed)
     except discord.errors.Forbidden:
         await interaction.followup.send("❌ Ich darf hier keine Nachrichten senden.", ephemeral=True)
         return
