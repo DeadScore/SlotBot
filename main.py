@@ -889,9 +889,6 @@ async def event_edit(
     slots: str = None,
     cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
-    # Defer early to avoid interaction timeout
-    await interaction.response.defer(ephemeral=True)
-
     own = [
         (mid, ev)
         for mid, ev in active_events.items()
@@ -1027,7 +1024,7 @@ async def event_edit(
 
     await update_event_message(msg_id)
     await safe_save()
-    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
     if thread_changes:
         guild = interaction.guild
