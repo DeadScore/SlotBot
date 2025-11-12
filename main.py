@@ -889,6 +889,18 @@ async def event_edit(
     slots: str = None,
     cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
+    """
+    Bearbeitet das zuletzt geplante Event des Aufrufers auf diesem Server.
+    Unterstützt: Datum, Zeit, Ort, Level, Anmerkung, Slots, Cleanup-Stunden.
+    """
+    # Falls der Speicher leer ist, versuche einmalig einen Reload von GitHub
+    if not active_events:
+        loaded = load_events_with_retry()
+        if loaded:
+            active_events.clear()
+            active_events.update(loaded)
+
+    # Eigene Events auf diesem Server suchen (Creator-Fix: serverweit, nicht nur Channel)
     own = [
         (mid, ev)
         for mid, ev in active_events.items()
@@ -902,6 +914,7 @@ async def event_edit(
         )
         return
 
+    # Neuestes Event nach event_time wählen
     msg_id, ev = max(
         own,
         key=lambda x: x[1].get("event_time", datetime.min.replace(tzinfo=pytz.utc)),
@@ -1022,16 +1035,19 @@ async def event_edit(
         ev["cleanup_hours"] = int(cleanup_hours)
         thread_changes.append(f"Cleanup auf {int(cleanup_hours)}h geändert")
 
+    # Eventnachricht + Speicher aktualisieren
     await update_event_message(msg_id)
     await safe_save()
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
+    # Thread-Log schreiben
     if thread_changes:
         guild = interaction.guild
         changes = ", ".join(thread_changes)
         await post_event_update_log(ev, guild, interaction.user.mention, changes, msg_id)
         if any(s.startswith("Datum/Zeit:") for s in thread_changes):
             await post_calendar_links(ev, guild, msg_id)
+
 
 
 # ----------------- /event_delete -----------------
