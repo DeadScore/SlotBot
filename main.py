@@ -890,12 +890,11 @@ async def event_edit(
     cleanup_hours: Optional[app_commands.Range[int, 1, 168]] = None,
 ):
     """
-
-    # Interaktion sofort deferen, um Timeout zu vermeiden
-    await interaction.response.defer(ephemeral=True)
     Bearbeitet das zuletzt geplante Event des Aufrufers auf diesem Server.
     Unterstützt: Datum, Zeit, Ort, Level, Anmerkung, Slots, Cleanup-Stunden.
     """
+    # Interaktion sofort deferen, um Timeout zu vermeiden
+    await interaction.response.defer(ephemeral=True)
 
     # Eigene Events auf diesem Server suchen (Creator-Fix: serverweit, nicht nur Channel)
     own = [
