@@ -1,5 +1,5 @@
-# main.py — SlotBot v4.4 
-# Changelog v4.4:
+# main.py — SlotBot v4.4.1 
+# Changelog v4.4.1:
 # - Toleranter Slot-Parser (beliebig viele Leerzeichen rund um ":")
 # - Kalenderlinks nebeneinander im Thread
 # - /events Alias zu /event_list
@@ -648,18 +648,21 @@ async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📖 SlotBot – Ausführliche Hilfe",
         description=(
-            "Der SlotBot hilft dir, Events zu erstellen, zu verwalten und übersichtlich zu halten.\n"
-            "Unten findest du alle Befehle mit Beispielen und Hinweisen."
+            "Der SlotBot hilft dir, Events zu erstellen, zu verwalten und sauber zu organisieren.\n"
+            "Event-Posts werden **als Embeds** gepostet (farbig je nach Art), Kalenderlinks landen im **Thread**."
         ),
         color=0x5865F2,
     )
     embed.add_field(
         name="🆕 /event",
         value=(
-            "**Beschreibung:** Erstellt ein neues Event mit Slots und Thread.\n"
+            "**Beschreibung:** Erstellt ein neues Event mit Slots, **Embed-Post** und Thread.\n"
             "**Pflichtfelder:** `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
             "**Optional:** `cleanup_hours` (Standard **1h**), `typ`, `gruppenlead`, `anmerkung`\n"
-            "**Datum/Zeit:** Wochentag wird automatisch angehängt.\n"
+            "**Hinweise:**\n"
+            "• **Slots**: tolerant – beliebig viele Leerzeichen um `:` erlaubt (z. B. `⚔️  :   3`).\n"
+            "• **Cleanup**: wird **nicht im Post** angezeigt; der Embed-Footer nennt nur die Zeit („Automatisches Löschen: Xh“).\n"
+            "• **Farben**: PvE = Grün, PvP = Rot, PVX = Blau.\n"
             "**Beispiel:**\n"
             "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 level:61+ stil:\"Organisiert\" "
             "slots:\"⚔️:3 🛡️:1 💉:2\" cleanup_hours:24 typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
@@ -671,28 +674,24 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "**Beschreibung:** Bearbeitet **dein** Event (nur Ersteller).\n"
             "**Unterstützt:** `datum`, `zeit`, `ort`, `level`, `anmerkung`, `slots`, `cleanup_hours`\n"
-            "**Anzeige:** Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt (nur letzte Änderung)."
+            "**Anzeige:** Alte Werte werden im Header `~~durchgestrichen~~ → neu` vermerkt (nur letzte Änderung)."
         ),
         inline=False,
     )
     embed.add_field(
         name="🗑️ /event_delete",
-        value=(
-            "**Beschreibung:** Löscht **dein** aktuelles Event (nur Ersteller)."
-        ),
+        value="**Beschreibung:** Löscht **dein** aktuelles Event (inkl. Thread).",
         inline=False,
     )
     embed.add_field(
         name="🗓️ /events",
-        value=(
-            "**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link."
-        ),
+        value="**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link.",
         inline=False,
     )
     embed.add_field(
         name="ℹ️ /event_info",
         value=(
-            "**Beschreibung:** Zeigt Details zu **deinem aktuellen Event** auf diesem Server als Embed.\n"
+            "**Beschreibung:** Zeigt Details zu **deinem aktuellen Event** als Embed.\n"
             "Enthält Basisdaten, Slots (Hauptslot + Warteliste) und einen Direktlink zur Event-Nachricht."
         ),
         inline=False,
@@ -708,9 +707,6 @@ async def help_command(interaction: discord.Interaction):
         inline=False,
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# ----------------- /event -----------------
 @bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/PVX)",
