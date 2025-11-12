@@ -1,17 +1,9 @@
-# main.py — SlotBot v4.3.3 (stabiler Reset + tolerantes /event_edit-Zeitformat)
-# Changelog v4.3.3:
-# - Toleranter Slot-Parser (beliebig viele Leerzeichen rund um ":")
-# - Kalenderlinks nebeneinander im Thread
-# - /events Alias zu /event_list
-# - Thread-Logs bei An-/Abmeldung (Reaktionen)
-# - Neuer Befehl: /event_info (zeigt dein aktuelles Event als Embed)
-#
-# Zusatz in dieser Version:
-# - /event_edit: toleranter Zeit-Parser (22, 22.15, 22:15, 22 Uhr werden akzeptiert)
-#
+# main.py — SlotBot v4.3.3 (Text-Events, keine Embeds für Event-Posts)
 # Features:
 # - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help
+# - Event-Posts als Klartext (kein Embed), mit Fake-Box-Style (Variante B)
 # - Deutsche Wochentage im Datum
+# - Art mit farbigen Emojis (PvE/PvP/PVX)
 # - Strike-Through bei Änderungen (nur letzte alte Angabe)
 # - Thread-Logs (robust: ent-archivieren/neu erstellen)
 # - 10-Minuten-Reminder per DM
@@ -20,8 +12,6 @@
 # - Emoji-Fix: Problematische Emojis werden übersprungen; Hinweis im Thread
 # - Creator-Fix: Edit/Delete findet Events serverweit des Erstellers (nicht nur Channel)
 # - Kalenderlinks NUR im Thread: Google + Apple (.ics-Anhang, oder Link via PUBLIC_BASE_URL)
-#
-# Repo-Default (Fallback): DeadScore/SlotBot  — kann per Env überschrieben werden.
 #
 # ENV Variablen (Render > Environment):
 # - DISCORD_TOKEN           (required)
@@ -41,6 +31,7 @@ import base64
 import requests
 from datetime import datetime, timedelta
 from threading import Thread
+from typing import Dict, Any
 
 import pytz
 from urllib.parse import quote_plus
@@ -76,18 +67,24 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-Memory
-active_events: dict[int, dict] = {}  # message_id -> event data
+active_events: Dict[int, Dict[str, Any]] = {}  # message_id -> event data
 SAVE_LOCK = asyncio.Lock()
 
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
     "Monday": "Montag",
-    "Tuesday": "Dienstay",
+    "Tuesday": "Dienstag",
     "Wednesday": "Mittwoch",
     "Thursday": "Donnerstag",
     "Friday": "Freitag",
     "Saturday": "Samstag",
     "Sunday": "Sonntag",
+}
+
+ART_EMOJI = {
+    "PvE": "🟢",
+    "PvP": "🔴",
+    "PVX": "🟣",
 }
 
 
@@ -103,11 +100,10 @@ def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
     return f"{start_utc.strftime(fmt)}/{end_utc.strftime(fmt)}"
 
 
-# ---- Toleranter Zeitparser für /event_edit (22, 22.15, 22:15, 22 Uhr) ----
 def parse_time_tolerant(s: str, fallback_hhmm: str) -> str:
     """
-    Nimmt Eingaben wie "22", "22 Uhr", "22.15", "22:15" und normalisiert sie zu "HH:MM".
-    Wenn nichts passt, wird fallback_hhmm zurückgegeben.
+    Akzeptiert z. B. "22", "22 Uhr", "22.15", "22:15" und normalisiert zu "HH:MM".
+    Wenn nichts passt, fallback_hhmm.
     """
     if not s:
         return fallback_hhmm
@@ -179,7 +175,7 @@ def parse_slots(slots_str: str, guild: discord.Guild):
     matches = SLOT_PATTERN.findall(slots_str or "")
     if not matches:
         return None
-    slot_dict: dict[str, dict] = {}
+    slot_dict: Dict[str, Dict[str, Any]] = {}
     for emoji, limit in matches:
         em = normalize_emoji(emoji)
         if not is_valid_emoji(em, guild):
@@ -189,14 +185,14 @@ def parse_slots(slots_str: str, guild: discord.Guild):
 
 
 def format_event_text(event, guild: discord.Guild):
-    text = "**📋 Eventübersicht:**\n"
+    text = "🎟️ **Slots:**\n"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
-        text += f"\n{emoji} ({len(main_users)}/{slot['limit']}): "
+        text += f"\n{emoji} **({len(main_users)}/{slot['limit']})**: "
         text += ", ".join(main_users) if main_users else "-"
         if wait_users:
-            text += f"\n   ⏳ Warteliste: " + ", ".join(wait_users)
+            text += f"\n   ⏳ **Warteliste:** " + ", ".join(wait_users)
     return text
 
 
@@ -243,7 +239,8 @@ async def update_event_message(message_id: int):
     for _ in range(3):
         try:
             msg = await channel.fetch_message(int(message_id))
-            await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
+            content = ev["header"] + "\n\n" + format_event_text(ev, guild)
+            await msg.edit(content=content)
             return
         except Exception:
             await asyncio.sleep(1)
@@ -277,7 +274,7 @@ def load_events_once():
         r = requests.get(url, headers=gh_headers(), timeout=10)
         if r.status_code == 200:
             raw = json.loads(base64.b64decode(r.json()["content"]))
-            fixed: dict[int, dict] = {}
+            fixed: Dict[int, Dict[str, Any]] = {}
             for k, ev in raw.items():
                 for key in ("creator_id", "channel_id", "guild_id", "thread_id"):
                     if key in ev:
@@ -323,7 +320,7 @@ def save_events():
         get_resp = requests.get(url, headers=gh_headers(), timeout=10)
         sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
 
-        serializable = {}
+        serializable: Dict[str, Any] = {}
         for mid, ev in active_events.items():
             copy = json.loads(json.dumps(ev))
             for s in copy["slots"].values():
@@ -584,23 +581,18 @@ async def help_command(interaction: discord.Interaction):
             "**Beschreibung:** Bearbeitet **dein** Event (nur Ersteller).\n"
             "**Unterstützt:** `datum`, `zeit`, `ort`, `level`, `anmerkung`, `slots`\n"
             "**Anzeige:** Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt (nur letzte Änderung).\n"
-            "**Beispiel:**\n"
-            "`/event_edit datum:28.10.2025 zeit:21:00 ort:\"Velia\" level:62+ slots:\"⚔️:2 🛡️:2\" anmerkung:\"10 Min früher treffen\"`"
+            "**Hinweis:** Zeit-Eingaben wie `22`, `22.15`, `22:15` oder `22 Uhr` sind erlaubt.\n"
         ),
         inline=False,
     )
     embed.add_field(
         name="🗑️ /event_delete",
-        value=(
-            "**Beschreibung:** Löscht **dein** aktuelles Event (nur Ersteller)."
-        ),
+        value="**Beschreibung:** Löscht **dein** aktuelles Event (nur Ersteller).",
         inline=False,
     )
     embed.add_field(
         name="🗓️ /events",
-        value=(
-            "**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link."
-        ),
+        value="**Beschreibung:** Zeigt alle **aktiven Events des gesamten Servers** mit Zeit, Ersteller & Channel-Link.",
         inline=False,
     )
     embed.add_field(
@@ -681,23 +673,30 @@ async def event(
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Header bauen
+    # Header bauen (Fake-Box-Style, reiner Text)
     time_str = format_de_datetime(local_dt)
-    header = (
-        f"📣 **@here — Neue Gruppensuche!**\n\n"
-        f"🗡️ **Art:** {art.value}\n"
-        f"🎯 **Zweck:** {zweck}\n"
-        f"📍 **Ort:** {ort}\n"
-        f"🕒 **Datum/Zeit:** {time_str}\n"
-        f"⚔️ **Levelbereich:** {level}\n"
-        f"💬 **Stil:** {stil.value}\n"
-    )
+    art_emoji = ART_EMOJI.get(art.value, "🟦")
+    title_line = f"{art_emoji} **{art.value} – Neue Gruppensuche!**"
+    sep = "─────────────────────────────────"
+
+    header_lines = [
+        title_line,
+        sep,
+        f"🎯 **Zweck:** {zweck}",
+        f"📍 **Ort:** {ort}",
+        f"🕒 **Datum/Zeit:** {time_str}",
+        f"⚔️ **Levelbereich:** {level}",
+        f"💬 **Stil:** {stil.value}",
+    ]
     if typ:
-        header += f"🏷️ **Typ:** {typ.value}\n"
+        header_lines.append(f"🏷️ **Typ:** {typ.value}")
     if gruppenlead:
-        header += f"👑 **Gruppenlead:** {gruppenlead}\n"
+        header_lines.append(f"👑 **Gruppenlead:** {gruppenlead}")
     if anmerkung:
-        header += f"📝 **Anmerkung:** {anmerkung}\n"
+        header_lines.append(f"📝 **Anmerkung:** {anmerkung}")
+    header_lines.append(sep)
+
+    header = "\n".join(header_lines)
 
     await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
 
@@ -796,7 +795,7 @@ async def event_edit(
         own,
         key=lambda x: x[1].get("event_time", datetime.min.replace(tzinfo=pytz.utc)),
     )
-    thread_changes: list[str] = []
+    thread_changes = []
 
     PREFIX_DATE = "🕒 **Datum/Zeit:**"
     PREFIX_ORG = "📍 **Ort:**"
@@ -806,7 +805,6 @@ async def event_edit(
     if datum or zeit:
         old_local = ev["event_time"].astimezone(BERLIN_TZ)
         try:
-            # toleranter Zeit-Parser
             fallback_time = old_local.strftime("%H:%M")
             time_str = parse_time_tolerant(zeit, fallback_time) if zeit else fallback_time
             new_local = BERLIN_TZ.localize(
@@ -856,7 +854,15 @@ async def event_edit(
                 ev["header"],
             )
         else:
-            ev["header"] += f"📝 **Anmerkung:** {anmerkung}\n"
+            # Vor die untere Trennlinie einfügen
+            if "─────────────────────────────────" in ev["header"]:
+                ev["header"] = ev["header"].replace(
+                    "─────────────────────────────────",
+                    f"📝 **Anmerkung:** {anmerkung}\n─────────────────────────────────",
+                    1,
+                )
+            else:
+                ev["header"] += f"\n📝 **Anmerkung:** {anmerkung}"
         thread_changes.append("Anmerkung aktualisiert")
 
     # Slots
@@ -1053,7 +1059,7 @@ async def event_info(interaction: discord.Interaction):
         inline=False,
     )
 
-    slot_lines: list[str] = []
+    slot_lines = []
     for emoji, slot in ev["slots"].items():
         main_users = [
             guild.get_member(uid).mention
