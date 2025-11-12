@@ -893,12 +893,6 @@ async def event_edit(
     Bearbeitet das zuletzt geplante Event des Aufrufers auf diesem Server.
     Unterstützt: Datum, Zeit, Ort, Level, Anmerkung, Slots, Cleanup-Stunden.
     """
-    # Falls der Speicher leer ist, versuche einmalig einen Reload von GitHub
-    if not active_events:
-        loaded = load_events_with_retry()
-        if loaded:
-            active_events.clear()
-            active_events.update(loaded)
 
     # Eigene Events auf diesem Server suchen (Creator-Fix: serverweit, nicht nur Channel)
     own = [
