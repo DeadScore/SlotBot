@@ -1,36 +1,4 @@
 {
-    "1438598880810762484": {
-        "title": "Test",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [
-                    404173735130562562
-                ],
-                "afk_dm_sent": [
-                    404173735130562562
-                ]
-            },
-            "\ud83c\udd99": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Test\n\ud83d\udccd **Ort:** Test\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 13.11.2025 19:50 CET\n\u2694\ufe0f **Levelbereich:** tt\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-11-13T18:50:00+00:00",
-        "thread_id": 1438598880810762484,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-11-13T19:50:00+00:00",
-        "art": "PvE"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
