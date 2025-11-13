@@ -42,6 +42,9 @@ GITHUB_FILE_PATH = os.getenv("GITHUB_FILE_PATH", "data/events.json")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # optional, für klickbaren ICS-Link
 
+# Nur dieser User darf /test ausführen
+OWNER_ID = 404173735130562562
+
 # ----------------- Intents & Bot -----------------
 intents = discord.Intents.default()
 intents.message_content = True
@@ -452,7 +455,10 @@ async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id:
     thread = None
     thread_id = ev.get("thread_id")
     if thread_id:
-        thread = guild.get_channel(thread_id) or await guild.fetch_channel(thread_id)
+        try:
+            thread = guild.get_channel(thread_id) or await guild.fetch_channel(thread_id)
+        except Exception:
+            thread = None
     if thread and getattr(thread, "archived", False):
         try:
             await thread.edit(archived=False)
@@ -618,14 +624,13 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name="🧪 /test",
-        value="Führt einen Selbsttest (GitHub, Persistenz, Events) aus und zeigt ein Status-Embed.",
+        value="Führt einen Selbsttest (GitHub, Persistenz, Rechte, Posting) aus. Nur vom Bot-Owner nutzbar.",
         inline=False,
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ----------------- /event -----------------
-@bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 @app_commands.describe(
     art="Art des Events (PvE/PvP/PVX)",
     zweck="Zweck (z. B. EP Farmen)",
@@ -645,6 +650,7 @@ async def help_command(interaction: discord.Interaction):
     stil=[app_commands.Choice(name=x, value=x) for x in ["Gemütlich", "Organisiert"]],
     typ=[app_commands.Choice(name=x, value=x) for x in ["Gruppe", "Raid"]],
 )
+@bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 async def event(
     interaction: discord.Interaction,
     art: app_commands.Choice[str],
@@ -660,7 +666,7 @@ async def event(
     anmerkung: str = None,
     auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
-    # Datum/Zeit prüfen (basic, tolerant Zeit)
+    # Datum/Zeit prüfen
     try:
         local_date = datetime.strptime(datum, "%d.%m.%Y")
         local_date = BERLIN_TZ.localize(local_date)
@@ -694,7 +700,7 @@ async def event(
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Header bauen (Text)
+    # Header bauen
     time_str_long = format_de_datetime(local_dt)
     art_emoji = ART_EMOJI.get(art.value, "🗡️")
     sep = "─────────────────────────────────"
@@ -742,7 +748,7 @@ async def event(
         await interaction.followup.send(f"❌ Fehler beim Erstellen des Events: {e}", ephemeral=True)
         return
 
-    # Reaktionen hinzufügen
+    # Reaktionen
     failed_emojis = []
     for e in slot_dict.keys():
         try:
@@ -750,7 +756,7 @@ async def event(
         except Exception:
             failed_emojis.append(e)
 
-    # Thread erstellen
+    # Thread
     thread_id = None
     try:
         thread = await msg.create_thread(
@@ -761,7 +767,6 @@ async def event(
         thread_id = thread.id
         if failed_emojis:
             await thread.send("⚠️ Einige Emojis konnten nicht hinzugefügt werden: " + ", ".join(failed_emojis))
-        # Kalenderlinks
         await post_calendar_links(
             {
                 "title": zweck,
@@ -794,7 +799,6 @@ async def event(
 
 
 # ----------------- /event_edit -----------------
-@bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
 @app_commands.describe(
     datum="Neues Datum (DD.MM.YYYY)",
     zeit="Neue Zeit (z. B. 22, 22.15, 22:15, 22 Uhr)",
@@ -803,6 +807,7 @@ async def event(
     anmerkung="Neue Anmerkung",
     slots="Neue Slots (z. B. ⚔️:3 🛡️:2)",
 )
+@bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
 async def event_edit(
     interaction: discord.Interaction,
     datum: str = None,
@@ -1247,17 +1252,25 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 # ----------------- /test -----------------
 @bot.tree.command(name="test", description="Prüft grundlegende Bot-Funktionalität")
 async def test_command(interaction: discord.Interaction):
+    # Nur Owner darf testen
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message(
+            "❌ Du darfst diesen Test nicht ausführen.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.defer(ephemeral=True)
 
-    results = []
+    results: List[tuple[str, bool]] = []
 
-    # ENV
+    # ENV / GitHub Basics
     results.append(("DISCORD_TOKEN gesetzt", TOKEN is not None))
     results.append(("GITHUB_TOKEN gesetzt", GITHUB_TOKEN is not None))
     results.append(("GITHUB_REPO gesetzt", bool(GITHUB_REPO)))
     results.append(("GITHUB_FILE_PATH gesetzt", bool(GITHUB_FILE_PATH)))
 
-    # GitHub Read
+    # GitHub erreichbar?
     gh_read_ok = False
     if GITHUB_TOKEN and GITHUB_REPO:
         try:
@@ -1268,7 +1281,7 @@ async def test_command(interaction: discord.Interaction):
             gh_read_ok = False
     results.append(("GitHub erreichbar (events.json)", gh_read_ok))
 
-    # Save-Test (ohne Exception)
+    # Save-Test
     save_ok = True
     try:
         save_events()
@@ -1276,7 +1289,7 @@ async def test_command(interaction: discord.Interaction):
         save_ok = False
     results.append(("Persistenz-Speicherfunktion ausführbar", save_ok))
 
-    # Events vorhanden?
+    # Aktive Events vorhanden?
     results.append(("Aktive Events im Speicher", len(active_events) > 0))
 
     # ICS-Test (falls Event vorhanden)
@@ -1293,7 +1306,76 @@ async def test_command(interaction: discord.Interaction):
             ics_ok = False
     results.append(("ICS-Generierung für ein Event", ics_ok))
 
-    # Reminder/Cleanup nur logisch
+    # Guild/Channel Tests
+    channel_send_ok = False
+    thread_create_ok = False
+    reaction_ok = False
+    perms_ok_send = False
+    perms_ok_thread = False
+    perms_ok_react = False
+
+    if interaction.guild and isinstance(interaction.channel, discord.abc.Messageable):
+        guild = interaction.guild
+        me = guild.me or guild.get_member(bot.user.id)
+        perms = interaction.channel.permissions_for(me)
+
+        perms_ok_send = perms.send_messages
+        perms_ok_thread = perms.create_public_threads or perms.create_private_threads or perms.send_messages_in_threads
+        perms_ok_react = perms.add_reactions
+
+        results.append(("Recht: Nachrichten senden im aktuellen Channel", perms_ok_send))
+        results.append(("Recht: Threads erstellen im aktuellen Channel", perms_ok_thread))
+        results.append(("Recht: Reaktionen hinzufügen im aktuellen Channel", perms_ok_react))
+
+        test_msg = None
+        test_thread = None
+
+        # Test: Nachricht senden
+        try:
+            test_msg = await interaction.channel.send("🧪 SlotBot-Test: Nachricht senden...")
+            channel_send_ok = True
+        except Exception:
+            channel_send_ok = False
+
+        # Test: Thread
+        if test_msg:
+            try:
+                test_thread = await test_msg.create_thread(
+                    name="🧪 SlotBot-Test-Thread",
+                    auto_archive_duration=60,
+                )
+                thread_create_ok = True
+            except Exception:
+                thread_create_ok = False
+
+        # Test: Reaktion
+        if test_msg:
+            try:
+                await test_msg.add_reaction("✅")
+                reaction_ok = True
+            except Exception:
+                reaction_ok = False
+
+        # Cleanup Test-Objekte
+        try:
+            if test_thread:
+                await test_thread.delete()
+        except Exception:
+            pass
+        try:
+            if test_msg:
+                await test_msg.delete()
+        except Exception:
+            pass
+
+    else:
+        results.append(("Guild-Kontext vorhanden", False))
+
+    results.append(("Nachricht im aktuellen Channel sendbar (praktisch)", channel_send_ok))
+    results.append(("Thread im aktuellen Channel erstellbar (praktisch)", thread_create_ok))
+    results.append(("Reaktionen im aktuellen Channel nutzbar (praktisch)", reaction_ok))
+
+    # Reminder/Cleanup (logische Checks)
     results.append(("Reminder-Task registriert (logisch)", True))
     results.append(("Auto-Cleanup aktiv (logisch)", True))
 
@@ -1301,7 +1383,7 @@ async def test_command(interaction: discord.Interaction):
     total = len(results)
 
     embed = discord.Embed(
-        title="🧪 SlotBot – Selbsttest",
+        title="🧪 SlotBot – Selbsttest (Owner)",
         description=f"{ok_count}/{total} Checks OK",
         color=discord.Color.green() if ok_count == total else discord.Color.orange(),
     )
@@ -1310,7 +1392,7 @@ async def test_command(interaction: discord.Interaction):
         emoji = "✅" if ok else "❌"
         embed.add_field(name=name, value=emoji, inline=False)
 
-    embed.set_footer(text="Hinweis: Reaktionen, DM-Reminder & Rechte müssen im Livebetrieb getestet werden.")
+    embed.set_footer(text="Reale Event-Slots & DM-Reminder bitte im Live-Betrieb mit einem Test-Event prüfen.")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
