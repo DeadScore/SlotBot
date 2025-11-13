@@ -1,4 +1,25 @@
 {
+    "1438553464476139530": {
+        "title": "Test",
+        "slots": {
+            "\ud83c\udd99": {
+                "limit": 2,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1420165456395767939,
+        "guild_id": 1420155879759675496,
+        "header": "\ud83d\udd34 **PvP \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Test\n\ud83d\udccd **Ort:** test\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 13.11.2025 16:40 CET\n\u2694\ufe0f **Levelbereich:** 1\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 404173735130562562,
+        "event_time": "2025-11-13T15:40:00+00:00",
+        "thread_id": 1438553464476139530,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-11-13T16:40:00+00:00",
+        "art": "PvP"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -30,6 +51,14 @@
             "art": "PvE",
             "created_at": "2025-11-13T12:05:44.830274",
             "event_time": "2025-11-13T21:00:00+00:00"
+        },
+        {
+            "guild_id": 1420155879759675496,
+            "creator_id": 404173735130562562,
+            "title": "Test",
+            "art": "PvP",
+            "created_at": "2025-11-13T15:37:54.507704",
+            "event_time": "2025-11-13T15:40:00+00:00"
         }
     ]
 }
