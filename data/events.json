@@ -3,26 +3,21 @@
         "title": "Testen klickt euch durch",
         "slots": {
             "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 2,
-                "main": [
-                    314461789012361217,
-                    404173735130562562
-                ],
+                "limit": 1,
+                "main": [],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
             },
             "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 2,
-                "main": [
-                    373132834883371009
-                ],
+                "limit": 1,
+                "main": [],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
             },
             "<:Summoner_Archetype:1345126764447269016>": {
-                "limit": 2,
+                "limit": 1,
                 "main": [],
                 "waitlist": [],
                 "reminded": [],
