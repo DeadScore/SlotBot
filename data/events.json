@@ -54,42 +54,6 @@
         "delete_at": "2025-11-13T19:30:00+00:00",
         "art": "PVX"
     },
-    "1438596839531216977": {
-        "title": "Test 2.0",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    314461789012361217
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "\ud83d\udc4d": {
-                "limit": 1,
-                "main": [
-                    404173735130562562
-                ],
-                "waitlist": [],
-                "reminded": [
-                    404173735130562562
-                ],
-                "afk_dm_sent": [
-                    404173735130562562
-                ]
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Test 2.0\n\ud83d\udccd **Ort:** Test\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 13.11.2025 19:40 CET\n\u2694\ufe0f **Levelbereich:** 1\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-11-13T18:40:00+00:00",
-        "thread_id": 1438596839531216977,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-11-13T19:40:00+00:00",
-        "art": "PvE"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
