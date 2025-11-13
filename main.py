@@ -65,6 +65,10 @@ SAVE_LOCK = asyncio.Lock()
 SUBSCRIPTIONS: Dict[int, Dict[str, List[int]]] = {}  # guild_id -> { "PvE": [user_ids], ... }
 EVENT_HISTORY: List[Dict[str, Any]] = []  # einfache Historie für /stats
 
+# Background-Tasks (für Health-Check im /test)
+BACKGROUND_TASKS: Dict[str, asyncio.Task] = {}
+
+
 # NEU: AFK-Pending (User müssen bestätigen, sonst werden sie gekickt)
 AFK_PENDING: Dict[Tuple[int, int, int], datetime] = {}  # (guild_id, msg_id, user_id) -> deadline
 
@@ -435,13 +439,19 @@ async def safe_save():
 
 
 async def try_reload_if_missing(message_id: int):
+    """Lädt Events bei Bedarf im Thread-Pool neu, blockiert nicht den Event-Loop."""
     if message_id in active_events:
         return True
-    fresh = load_events_with_retry()
+
+    loop = asyncio.get_running_loop()
+    # load_events_with_retry macht time.sleep und Requests -> ab damit in einen Thread
+    fresh = await loop.run_in_executor(None, load_events_with_retry)
+
     if fresh:
         active_events.clear()
         active_events.update(fresh)
         return message_id in active_events
+
     return False
 
 
@@ -1691,7 +1701,8 @@ async def on_message(message: discord.Message):
 
 
 # ----------------- /test -----------------
-@bot.tree.command(name="test", description="Prüft grundlegende Bot-Funktionalität")
+@bot.tree.command(name="test", description="Prüft grundleg# ----------------- /test -----------------
+@bot.tree.command(name="test", description="Prüft grundlegende Bot-Funktionalität & Hintergrund-Tasks")
 async def test_command(interaction: discord.Interaction):
     # Nur Owner darf testen
     if interaction.user.id != OWNER_ID:
@@ -1704,36 +1715,44 @@ async def test_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     results: List[tuple[str, bool]] = []
+    details: List[str] = []
 
-    # ENV / GitHub Basics
+    # 1) ENV / Basis-Konfiguration
     results.append(("DISCORD_TOKEN gesetzt", TOKEN is not None))
-    results.append(("GITHUB_TOKEN gesetzt", GITHUB_TOKEN is not None))
+    results.append(("GITHUB_TOKEN gesetzt (für Persistenz)", GITHUB_TOKEN is not None))
     results.append(("GITHUB_REPO gesetzt", bool(GITHUB_REPO)))
     results.append(("GITHUB_FILE_PATH gesetzt", bool(GITHUB_FILE_PATH)))
 
-    # GitHub erreichbar?
+    # 2) GitHub erreichbar?
     gh_read_ok = False
+    gh_status_text = "nicht geprüft"
     if GITHUB_TOKEN and GITHUB_REPO:
         try:
             url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
             r = requests.get(url, headers=gh_headers(), timeout=10)
-            gh_read_ok = r.status_code in (200, 404)
-        except Exception:
+            if r.status_code in (200, 404):
+                gh_read_ok = True
+                gh_status_text = f"HTTP {r.status_code}"
+            else:
+                gh_status_text = f"HTTP {r.status_code}"
+        except Exception as e:
+            gh_status_text = f"Exception: {type(e).__name__}"
             gh_read_ok = False
     results.append(("GitHub erreichbar (events.json)", gh_read_ok))
+    details.append(f"GitHub-Status: {gh_status_text}")
 
-    # Save-Test
+    # 3) Persistenz-Test (nicht blockierend dank safe_save)
     save_ok = True
     try:
-        save_events()
-    except Exception:
+        await safe_save()
+    except Exception as e:
         save_ok = False
-    results.append(("Persistenz-Speicherfunktion ausführbar", save_ok))
+        details.append(f"Persistenzfehler: {type(e).__name__}: {e}")
+    results.append(("Persistenz-Speicherfunktion ausführbar (safe_save)", save_ok))
 
-    # Aktive Events vorhanden?
+    # 4) Aktive Events / ICS-Test
     results.append(("Aktive Events im Speicher", len(active_events) > 0))
 
-    # ICS-Test (falls Event vorhanden)
     ics_ok = False
     if active_events:
         any_ev = next(iter(active_events.values()))
@@ -1743,11 +1762,12 @@ async def test_command(interaction: discord.Interaction):
             ort = m_ort.group(1) if m_ort else ""
             _ics = build_ics_content(any_ev["title"], any_ev["event_time"], 2, ort, "Test")
             ics_ok = bool(_ics)
-        except Exception:
+        except Exception as e:
+            details.append(f"ICS-Fehler: {type(e).__name__}: {e}")
             ics_ok = False
     results.append(("ICS-Generierung für ein Event", ics_ok))
 
-    # Guild/Channel Tests
+    # 5) Guild/Channel Rechte & praktische Tests
     channel_send_ok = False
     thread_create_ok = False
     reaction_ok = False
@@ -1765,7 +1785,7 @@ async def test_command(interaction: discord.Interaction):
         perms_ok_react = perms.add_reactions
 
         results.append(("Recht: Nachrichten senden im aktuellen Channel", perms_ok_send))
-        results.append(("Recht: Threads erstellen im aktuellen Channel", perms_ok_thread))
+        results.append(("Recht: Threads erstellen/benutzen im aktuellen Channel", perms_ok_thread))
         results.append(("Recht: Reaktionen hinzufügen im aktuellen Channel", perms_ok_react))
 
         test_msg = None
@@ -1775,7 +1795,8 @@ async def test_command(interaction: discord.Interaction):
         try:
             test_msg = await interaction.channel.send("🧪 SlotBot-Test: Nachricht senden...")
             channel_send_ok = True
-        except Exception:
+        except Exception as e:
+            details.append(f"Test-Nachricht fehlgeschlagen: {type(e).__name__}: {e}")
             channel_send_ok = False
 
         # Test: Thread
@@ -1786,7 +1807,8 @@ async def test_command(interaction: discord.Interaction):
                     auto_archive_duration=60,
                 )
                 thread_create_ok = True
-            except Exception:
+            except Exception as e:
+                details.append(f"Test-Thread fehlgeschlagen: {type(e).__name__}: {e}")
                 thread_create_ok = False
 
         # Test: Reaktion
@@ -1794,7 +1816,8 @@ async def test_command(interaction: discord.Interaction):
             try:
                 await test_msg.add_reaction("✅")
                 reaction_ok = True
-            except Exception:
+            except Exception as e:
+                details.append(f"Test-Reaction fehlgeschlagen: {type(e).__name__}: {e}")
                 reaction_ok = False
 
         # Cleanup Test-Objekte
@@ -1808,7 +1831,6 @@ async def test_command(interaction: discord.Interaction):
                 await test_msg.delete()
         except Exception:
             pass
-
     else:
         results.append(("Guild-Kontext vorhanden", False))
 
@@ -1816,11 +1838,28 @@ async def test_command(interaction: discord.Interaction):
     results.append(("Thread im aktuellen Channel erstellbar (praktisch)", thread_create_ok))
     results.append(("Reaktionen im aktuellen Channel nutzbar (praktisch)", reaction_ok))
 
-    # Reminder/Cleanup (logische Checks)
-    results.append(("Reminder-Task registriert (logisch)", True))
-    results.append(("AFK-Check-Task registriert (logisch)", True))
-    results.append(("Auto-Cleanup aktiv (logisch)", True))
+    # 6) WebSocket-Latenz
+    latency_ms = int(bot.latency * 1000) if bot.latency is not None else None
+    latency_ok = latency_ms is not None and latency_ms < 250
+    results.append(("WebSocket-Latenz < 250ms", latency_ok))
+    if latency_ms is not None:
+        details.append(f"Latenz: ~{latency_ms} ms")
 
+    # 7) Background-Tasks Health
+    for name, task in BACKGROUND_TASKS.items():
+        label = f"Background-Task: {name}"
+        ok = True
+        if task.cancelled():
+            ok = False
+            details.append(f"Task '{name}' ist CANCELLED.")
+        elif task.done():
+            exc = task.exception()
+            if exc:
+                ok = False
+                details.append(f"Task '{name}' ist DONE mit Fehler: {type(exc).__name__}: {exc}")
+        results.append((label, ok))
+
+    # Gesamtresultat
     ok_count = sum(1 for _, ok in results if ok)
     total = len(results)
 
@@ -1830,11 +1869,23 @@ async def test_command(interaction: discord.Interaction):
         color=discord.Color.green() if ok_count == total else discord.Color.orange(),
     )
 
+    # Haupt-Checks anzeigen
     for name, ok in results:
         emoji = "✅" if ok else "❌"
         embed.add_field(name=name, value=emoji, inline=False)
 
-    embed.set_footer(text="Reale Event-Slots, DMs & AFK-Checks bitte mit einem Test-Event prüfen.")
+    # Detail-Kasten, falls es Anmerkungen gibt
+    if details:
+        detail_text = "\n".join(details)
+        if len(detail_text) > 1024:
+            detail_text = detail_text[:1000] + "\n… (gekürzt)"
+        embed.add_field(
+            name="🔍 Details / Hinweise",
+            value=detail_text,
+            inline=False,
+        )
+
+    embed.set_footer(text="Reale Event-Slots, DMs & AFK-Checks bitte weiterhin mit einem Test-Event prüfen.")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -1877,6 +1928,30 @@ def run_bot():
     asyncio.run(bot.start(TOKEN))
 
 
+
+@bot.event
+async def on_error(event_method, *args, **kwargs):
+    """Fängt nicht behandelte Fehler in Events ab, damit der Bot nicht komplett stirbt."""
+    import traceback
+    print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
+    traceback.print_exc()
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Fängt Fehler in Slash-Commands ab und gibt eine freundliche Fehlermeldung zurück."""
+    print(f"❌ Slash-Command-Fehler: {error}")
+    try:
+        msg = "❌ Bei diesem Befehl ist ein Fehler aufgetreten. Bitte probiere es später erneut."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        # Im Zweifel lieber still schlucken als noch mehr kaputt zu machen
+        pass
+
+
 @bot.event
 async def on_ready():
     print(f"✅ SlotBot v4.6 online als {bot.user}")
@@ -1884,9 +1959,10 @@ async def on_ready():
     active_events.clear()
     active_events.update(loaded)
     print(f"📂 Aktive Events im Speicher: {len(active_events)}")
-    bot.loop.create_task(reminder_task())
-    bot.loop.create_task(afk_enforcer_task())
-    bot.loop.create_task(cleanup_task())
+    # Background-Tasks starten und referenzieren, damit wir sie im /test prüfen können
+    BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder_task")
+    BACKGROUND_TASKS["afk_enforcer"] = bot.loop.create_task(afk_enforcer_task(), name="slotbot_afk_enforcer_task")
+    BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup_task")
     try:
         await bot.tree.sync()
         print("📂 Slash Commands synchronisiert")
