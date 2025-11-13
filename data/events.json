@@ -5,13 +5,15 @@
             "<:Tank_Archetype:1345126746340458527>": {
                 "limit": 1,
                 "main": [
-                    404173735130562562
-                ],
-                "waitlist": [
                     314461789012361217
                 ],
-                "reminded": [],
-                "afk_dm_sent": []
+                "waitlist": [],
+                "reminded": [
+                    404173735130562562
+                ],
+                "afk_dm_sent": [
+                    404173735130562562
+                ]
             },
             "<:Cleric_Archetype:1345126828280512683>": {
                 "limit": 1,
