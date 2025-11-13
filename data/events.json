@@ -22,9 +22,7 @@
             },
             "<:Summoner_Archetype:1345126764447269016>": {
                 "limit": 2,
-                "main": [
-                    404173735130562562
-                ],
+                "main": [],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
