@@ -1701,8 +1701,10 @@ async def on_message(message: discord.Message):
 
 
 # ----------------- /test -----------------
-@bot.tree.command(name="test", description="Prüft grundleg# ----------------- /test -----------------
-@bot.tree.command(name="test", description="Prüft grundlegende Bot-Funktionalität & Hintergrund-Tasks")
+@bot.tree.command(
+    name="test",
+    description="Prüft grundlegende Bot-Funktionalität"
+)
 async def test_command(interaction: discord.Interaction):
     # Nur Owner darf testen
     if interaction.user.id != OWNER_ID:
