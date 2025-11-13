@@ -32,12 +32,14 @@
             },
             "<:Summoner_Archetype:1345126764447269016>": {
                 "limit": 1,
-                "main": [
+                "main": [],
+                "waitlist": [],
+                "reminded": [
                     404173735130562562
                 ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
+                "afk_dm_sent": [
+                    404173735130562562
+                ]
             }
         },
         "channel_id": 1318316138802712576,
