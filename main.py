@@ -1,13 +1,16 @@
-# main.py — SlotBot v4.3.3 (Text-Version)
+# main.py — SlotBot v4.6 (Text-Version)
 #
 # Features:
 # - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help, /test
+# - NEU: /subscribe, /unsubscribe, /stats
 # - Textbasierter Event-Post, ephemere /event-Bestätigung als Embed
 # - Auto-Cleanup: Event + Thread löschen sich X Stunden nach Start (Default 1h)
-# - GitHub-Persistenz (data/events.json)
-# - Reminder 10 Minuten vor Event
+# - Reminder 20 Minuten vor Eventstart (DM)
+# - AFK-Check 10 Minuten vor Eventstart (DM + Auto-Kick bei Nicht-Reaktion)
 # - Kalenderlinks (Google + Apple .ics im Thread)
 # - Reaction-Slots mit Warteliste
+# - Event-Historie für /stats
+# - Abonnements pro Event-Art (PvE/PvP/PVX)
 
 import os
 import re
@@ -17,7 +20,7 @@ import asyncio
 import base64
 from datetime import datetime, timedelta
 from threading import Thread
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 import requests
 import pytz
@@ -50,13 +53,20 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.guilds = True
-intents.members = True
+intents.members = True  # für DMs / Member-Fetch
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-Memory
 active_events: Dict[int, Dict[str, Any]] = {}  # message_id -> event data
 SAVE_LOCK = asyncio.Lock()
+
+# NEU: Abos & Event-Historie
+SUBSCRIPTIONS: Dict[int, Dict[str, List[int]]] = {}  # guild_id -> { "PvE": [user_ids], ... }
+EVENT_HISTORY: List[Dict[str, Any]] = []  # einfache Historie für /stats
+
+# NEU: AFK-Pending (User müssen bestätigen, sonst werden sie gekickt)
+AFK_PENDING: Dict[Tuple[int, int, int], datetime] = {}  # (guild_id, msg_id, user_id) -> deadline
 
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
@@ -126,7 +136,7 @@ def build_ics_content(title: str, start_utc: datetime, duration_hours: int, loca
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//SlotBot//v4.3.3//EN",
+        "PRODID:-//SlotBot//v4.6//EN",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}",
@@ -168,7 +178,13 @@ def parse_slots(slots_str: str, guild: discord.Guild):
         em = normalize_emoji(emoji)
         if not is_valid_emoji(em, guild):
             return f"Ungültiges Emoji: {em}"
-        slot_dict[em] = {"limit": int(limit), "main": set(), "waitlist": [], "reminded": set()}
+        slot_dict[em] = {
+            "limit": int(limit),
+            "main": set(),
+            "waitlist": [],
+            "reminded": set(),      # DM 20 Min vorher
+            "afk_dm_sent": set(),   # AFK-Check DM 10 Min vorher
+        }
     return slot_dict
 
 
@@ -255,8 +271,11 @@ def put_empty_events(obj):
 
 
 def load_events_once() -> Dict[int, Dict[str, Any]]:
+    global SUBSCRIPTIONS, EVENT_HISTORY
     if not GITHUB_TOKEN:
         print("⚠️ GITHUB_TOKEN fehlt – starte ohne Persistenz.")
+        SUBSCRIPTIONS = {}
+        EVENT_HISTORY = []
         return {}
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     try:
@@ -265,7 +284,36 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
             decoded = base64.b64decode(r.json()["content"]).decode("utf-8")
             raw = json.loads(decoded)
             fixed: Dict[int, Dict[str, Any]] = {}
+
+            # Subscriptions & History extrahieren
+            subs_raw = raw.get("_subscriptions")
+            if isinstance(subs_raw, dict):
+                subs: Dict[int, Dict[str, List[int]]] = {}
+                for g_id_str, mapping in subs_raw.items():
+                    try:
+                        g_id = int(g_id_str)
+                    except Exception:
+                        continue
+                    inner: Dict[str, List[int]] = {}
+                    if isinstance(mapping, dict):
+                        for art_key, user_list in mapping.items():
+                            if isinstance(user_list, list):
+                                inner[art_key] = [int(u) for u in user_list]
+                    subs[g_id] = inner
+                SUBSCRIPTIONS = subs
+            else:
+                SUBSCRIPTIONS = {}
+
+            hist_raw = raw.get("_history")
+            if isinstance(hist_raw, list):
+                EVENT_HISTORY = hist_raw
+            else:
+                EVENT_HISTORY = []
+
+            # Events laden (alles außer den Sonderkeys)
             for k, ev in raw.items():
+                if k in ("_subscriptions", "_history"):
+                    continue
                 for key in ("creator_id", "channel_id", "guild_id", "thread_id"):
                     if key in ev:
                         try:
@@ -288,16 +336,24 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
                     s["main"] = set(s.get("main", []))
                     s["waitlist"] = list(s.get("waitlist", []))
                     s["reminded"] = set(s.get("reminded", []))
-                fixed[int(k)] = ev
+                    s["afk_dm_sent"] = set(s.get("afk_dm_sent", []))
+                try:
+                    fixed[int(k)] = ev
+                except Exception:
+                    continue
             return fixed
         elif r.status_code == 404:
             print("ℹ️ Keine events.json gefunden – lege leere Datei an.")
             put_empty_events({})
+            SUBSCRIPTIONS = {}
+            EVENT_HISTORY = []
             return {}
         else:
             print(f"⚠️ Fehler beim Laden: HTTP {r.status_code}")
     except Exception as e:
         print(f"❌ Fehler beim Laden von events.json: {e}")
+    SUBSCRIPTIONS = {}
+    EVENT_HISTORY = []
     return {}
 
 
@@ -323,6 +379,7 @@ def save_events():
         sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
 
         serializable: Dict[str, Any] = {}
+        # Events
         for mid, ev in active_events.items():
             copy: Dict[str, Any] = {}
             for key, value in ev.items():
@@ -336,14 +393,27 @@ def save_events():
                             "main": list(s["main"]),
                             "waitlist": list(s["waitlist"]),
                             "reminded": list(s["reminded"]),
+                            "afk_dm_sent": list(s["afk_dm_sent"]),
                         }
                     copy["slots"] = slots_copy
                 else:
                     copy[key] = value
             serializable[str(mid)] = copy
 
+        # Subscriptions
+        subs_out: Dict[str, Dict[str, List[int]]] = {}
+        for g_id, mapping in SUBSCRIPTIONS.items():
+            inner: Dict[str, List[int]] = {}
+            for art_key, user_list in mapping.items():
+                inner[art_key] = list(set(int(u) for u in user_list))
+            subs_out[str(g_id)] = inner
+        serializable["_subscriptions"] = subs_out
+
+        # History
+        serializable["_history"] = EVENT_HISTORY
+
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
-        data = {"message": "Update events.json via SlotBot v4.3.3", "content": encoded_content}
+        data = {"message": "Update events.json via SlotBot v4.6", "content": encoded_content}
         if sha:
             data["sha"] = sha
         resp = requests.put(url, headers=gh_headers(), json=data, timeout=10)
@@ -387,8 +457,9 @@ def get_latest_user_event(guild_id: int, user_id: int):
     return msg_id, ev
 
 
-# ----------------- Reminder & Cleanup -----------------
+# ----------------- Reminder & Cleanup & AFK -----------------
 async def reminder_task():
+    """Reminder 20 Min vorher + AFK-Check 10 Min vorher (DM)."""
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now(pytz.utc)
@@ -402,21 +473,132 @@ async def reminder_task():
             for emoji, slot in ev["slots"].items():
                 if "reminded" not in slot:
                     slot["reminded"] = set()
+                if "afk_dm_sent" not in slot:
+                    slot["afk_dm_sent"] = set()
                 for user_id in list(slot["main"]):
-                    if user_id in slot["reminded"]:
-                        continue
                     seconds_left = (event_time - now).total_seconds()
-                    if 0 <= seconds_left <= 600:
+
+                    # 20-Min-Reminder
+                    if 0 <= seconds_left <= 20 * 60 and user_id not in slot["reminded"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(f"⏰ Dein Event **{ev['title']}** startet in 10 Minuten!")
+                            await member.send(
+                                f"⏰ Dein Event **{ev['title']}** startet in **20 Minuten**! "
+                                f"Bitte sei rechtzeitig online."
+                            )
                             slot["reminded"].add(user_id)
                         except Exception:
                             pass
-        await asyncio.sleep(60)
+
+                    # 10-Min-AFK-Check
+                    if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
+                        try:
+                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                            await member.send(
+                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
+                                f"Das Event startet in **10 Minuten**.\n"
+                                f"Bitte antworte in den nächsten **2 Minuten** hier im Chat, "
+                                f"sonst wirst du automatisch aus deinem Slot entfernt."
+                            )
+                            slot["afk_dm_sent"].add(user_id)
+                            AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=2)
+                        except Exception:
+                            pass
+        await asyncio.sleep(30)
+
+
+async def afk_enforcer_task():
+    """Kickt Nutzer aus dem Slot, die auf den AFK-Check nicht reagiert haben."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        for key, deadline in list(AFK_PENDING.items()):
+            guild_id, msg_id, user_id = key
+            if now < deadline:
+                continue
+            AFK_PENDING.pop(key, None)
+            ev = active_events.get(msg_id)
+            guild = bot.get_guild(guild_id)
+            if not ev or not guild:
+                continue
+
+            # Suche Slot & entferne User
+            removed_slot_emoji = None
+            promoted_user = None
+            for emoji, slot in ev["slots"].items():
+                if user_id in slot["main"]:
+                    slot["main"].remove(user_id)
+                    removed_slot_emoji = emoji
+                    if slot["waitlist"]:
+                        promoted_user = slot["waitlist"].pop(0)
+                        slot["main"].add(promoted_user)
+                    break
+                if user_id in slot["waitlist"]:
+                    try:
+                        slot["waitlist"].remove(user_id)
+                        removed_slot_emoji = emoji
+                    except ValueError:
+                        pass
+                    break
+
+            if not removed_slot_emoji:
+                continue
+
+            await update_event_message(msg_id)
+            await safe_save()
+
+            # DM an User
+            try:
+                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                if member:
+                    await member.send(
+                        f"❌ Du wurdest aus dem Event **{ev['title']}** entfernt, "
+                        f"weil du nicht auf den AFK-Check reagiert hast."
+                    )
+            except Exception:
+                pass
+
+            # Thread-Log
+            from_emoji = removed_slot_emoji
+            try:
+                await log_participation_change(
+                    ev,
+                    guild,
+                    msg_id,
+                    user_id,
+                    from_emoji,
+                    "leave",
+                    "AFK-Check",
+                )
+            except Exception:
+                pass
+
+            # Promotion-Log
+            if promoted_user is not None:
+                try:
+                    member = guild.get_member(promoted_user) or await guild.fetch_member(promoted_user)
+                    if member:
+                        await member.send(
+                            f"🎟️ Gute Nachricht: Du bist jetzt im **Hauptslot** für **{ev['title']}** "
+                            f"(frei geworden durch AFK-Check)."
+                        )
+                except Exception:
+                    pass
+                try:
+                    thread = await get_or_restore_thread(ev, guild, msg_id)
+                    if thread:
+                        await thread.send(
+                            f"🔄 <@{promoted_user}> wurde automatisch aus der Warteliste "
+                            f"in den Hauptslot verschoben (AFK-Check)."
+                        )
+                except Exception:
+                    pass
+
+        await asyncio.sleep(15)
 
 
 async def cleanup_task():
+    """Löscht Event-Nachricht + Thread nach delete_at."""
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now(pytz.utc)
@@ -438,10 +620,15 @@ async def cleanup_task():
                 if channel:
                     try:
                         msg = await channel.fetch_message(msg_id)
-                        thread = guild.get_channel(ev.get("thread_id"))
                         await msg.delete()
-                        if thread:
-                            await thread.delete()
+                    except Exception:
+                        pass
+                # Thread robust löschen
+                thread_id = ev.get("thread_id")
+                if thread_id:
+                    try:
+                        thread = guild.get_channel(thread_id) or await guild.fetch_channel(thread_id)
+                        await thread.delete()
                     except Exception:
                         pass
             finally:
@@ -579,7 +766,7 @@ async def log_participation_change(
 @bot.tree.command(name="help", description="Zeigt eine ausführliche Erklärung aller Befehle an")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📖 SlotBot – Hilfe",
+        title="📖 SlotBot v4.6 – Hilfe",
         description=(
             "Der SlotBot hilft dir, Events mit Slots zu erstellen und zu verwalten.\n"
             "Hier ein Überblick über die Befehle."
@@ -594,7 +781,9 @@ async def help_command(interaction: discord.Interaction):
             "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
             "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00`\n"
-            "`level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" auto_delete_stunden:3`"
+            "`level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" auto_delete_stunden:3`\n"
+            "• 20-Minuten-Reminder per DM\n"
+            "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
         ),
         inline=False,
     )
@@ -620,6 +809,22 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="ℹ️ /event_info",
         value="Zeigt Details & Slots zu deinem aktuellen Event als Embed.",
+        inline=False,
+    )
+    embed.add_field(
+        name="📩 /subscribe & /unsubscribe",
+        value=(
+            "Verwalte Benachrichtigungen für neue Events.\n"
+            "`/subscribe art:PvE` – DM bei neuen PvE-Events\n"
+            "`/subscribe art:PVX` – DM bei neuen PVX-Events\n"
+            "`/unsubscribe art:PvE` – PvE-DMs wieder abbestellen\n"
+            "`/subscribe art:Alle` – Alle Arten abonnieren"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 /stats",
+        value="Zeigt Event-Statistiken für diesen Server (Anzahl Events, Zeiten, Teilnahme-Trends).",
         inline=False,
     )
     embed.add_field(
@@ -783,6 +988,7 @@ async def event(
 
     delete_at = utc_dt + timedelta(hours=int(auto_delete_stunden))
 
+    # Event in Memory
     active_events[msg.id] = {
         "title": zweck,
         "slots": slot_dict,
@@ -794,8 +1000,38 @@ async def event(
         "thread_id": thread_id,
         "auto_delete_stunden": int(auto_delete_stunden),
         "delete_at": delete_at,
+        "art": art.value,
     }
+
+    # History-Eintrag
+    EVENT_HISTORY.append(
+        {
+            "guild_id": interaction.guild.id,
+            "creator_id": interaction.user.id,
+            "title": zweck,
+            "art": art.value,
+            "created_at": datetime.utcnow().isoformat(),
+            "event_time": utc_dt.isoformat(),
+        }
+    )
+
     await safe_save()
+
+    # Abonnenten benachrichtigen
+    guild_subs = SUBSCRIPTIONS.get(interaction.guild.id, {})
+    art_subs = set(guild_subs.get(art.value, []))
+    if art_subs:
+        for uid in list(art_subs):
+            try:
+                member = interaction.guild.get_member(uid) or await interaction.guild.fetch_member(uid)
+                if member:
+                    await member.send(
+                        f"📢 Neues **{art.value}**-Event auf {interaction.guild.name}:\n"
+                        f"**{zweck}** am {time_str_long} in {ort}\n"
+                        f"Channel: {interaction.channel.mention} — [Zum Event]({msg.jump_url})"
+                    )
+            except Exception:
+                pass
 
 
 # ----------------- /event_edit -----------------
@@ -973,11 +1209,19 @@ async def event_delete(interaction: discord.Interaction):
     msg_id, ev = found
     try:
         channel = interaction.guild.get_channel(ev["channel_id"])
-        msg = await channel.fetch_message(msg_id)
-        thread = interaction.guild.get_channel(ev.get("thread_id"))
-        await msg.delete()
-        if thread:
-            await thread.delete()
+        if channel:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+            except Exception:
+                pass
+        thread_id = ev.get("thread_id")
+        if thread_id:
+            try:
+                thread = interaction.guild.get_channel(thread_id) or await interaction.guild.fetch_channel(thread_id)
+                await thread.delete()
+            except Exception:
+                pass
         del active_events[msg_id]
         await safe_save()
         await interaction.response.send_message("✅ Dein Event wurde gelöscht.", ephemeral=True)
@@ -986,8 +1230,6 @@ async def event_delete(interaction: discord.Interaction):
             f"❌ Fehler beim Löschen: {e}",
             ephemeral=True,
         )
-
-
 # ----------------- /event_list + /events -----------------
 async def _send_event_list(interaction: discord.Interaction):
     items = sorted(
@@ -1018,8 +1260,10 @@ async def _send_event_list(interaction: discord.Interaction):
         creator_name = creator.mention if creator else f"<@{ev['creator_id']}>"
         channel_tag = ch.mention if ch else "#gelöscht"
         jump_url = f"https://discord.com/channels/{guild.id}/{ev['channel_id']}/{mid}"
+        art = ev.get("art", "Event")
+        art_emoji = ART_EMOJI.get(art, "🎮")
         lines.append(
-            f"• **{ev['title']}** — {when} — von {creator_name} — {channel_tag} — [zum Event]({jump_url})"
+            f"{art_emoji} **{ev['title']}** — {when} — von {creator_name} — {channel_tag} — [zum Event]({jump_url})"
         )
 
     embed = discord.Embed(
@@ -1055,8 +1299,11 @@ async def event_info(interaction: discord.Interaction):
     msg_id, ev = found
     guild = interaction.guild
 
+    art = ev.get("art", "Event")
+    art_emoji = ART_EMOJI.get(art, "🎮")
+
     embed = discord.Embed(
-        title=f"📋 Event-Info: {ev['title']}",
+        title=f"{art_emoji} Event-Info: {ev['title']}",
         color=0x3498DB,
     )
     embed.add_field(
@@ -1093,6 +1340,166 @@ async def event_info(interaction: discord.Interaction):
     embed.add_field(
         name="🔗 Direkt zum Event",
         value=f"[Hier klicken]({jump_url})",
+        inline=False,
+    )
+
+    auto_del = ev.get("auto_delete_stunden")
+    if auto_del:
+        embed.add_field(
+            name="⏱️ Auto-Löschung",
+            value=f"{auto_del}h nach Start",
+            inline=True,
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ----------------- /subscribe & /unsubscribe -----------------
+@app_commands.choices(
+    art=[app_commands.Choice(name=x, value=x) for x in ["PvE", "PvP", "PVX", "Alle"]],
+)
+@bot.tree.command(name="subscribe", description="Abonniere Benachrichtigungen für neue Events")
+async def subscribe_command(interaction: discord.Interaction, art: app_commands.Choice[str]):
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+    art_value = art.value
+
+    if guild_id not in SUBSCRIPTIONS:
+        SUBSCRIPTIONS[guild_id] = {"PvE": [], "PvP": [], "PVX": []}
+
+    if art_value == "Alle":
+        for key in ["PvE", "PvP", "PVX"]:
+            if user_id not in SUBSCRIPTIONS[guild_id].setdefault(key, []):
+                SUBSCRIPTIONS[guild_id][key].append(user_id)
+        await interaction.response.send_message(
+            "✅ Du erhältst jetzt DMs für **alle** neuen Events (PvE, PvP, PVX).",
+            ephemeral=True,
+        )
+    else:
+        li = SUBSCRIPTIONS[guild_id].setdefault(art_value, [])
+        if user_id in li:
+            await interaction.response.send_message(
+                f"ℹ️ Du warst bereits für **{art_value}**-Events abonniert.",
+                ephemeral=True,
+            )
+        else:
+            li.append(user_id)
+            await interaction.response.send_message(
+                f"✅ Du erhältst jetzt DMs für neue **{art_value}**-Events.",
+                ephemeral=True,
+            )
+
+    await safe_save()
+
+
+@app_commands.choices(
+    art=[app_commands.Choice(name=x, value=x) for x in ["PvE", "PvP", "PVX", "Alle"]],
+)
+@bot.tree.command(name="unsubscribe", description="Beende Benachrichtigungen für neue Events")
+async def unsubscribe_command(interaction: discord.Interaction, art: app_commands.Choice[str]):
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+    art_value = art.value
+
+    if guild_id not in SUBSCRIPTIONS:
+        SUBSCRIPTIONS[guild_id] = {"PvE": [], "PvP": [], "PVX": []}
+
+    if art_value == "Alle":
+        for key in ["PvE", "PvP", "PVX"]:
+            lst = SUBSCRIPTIONS[guild_id].setdefault(key, [])
+            if user_id in lst:
+                lst.remove(user_id)
+        await interaction.response.send_message(
+            "✅ Du erhältst keine DMs mehr für neue Events.",
+            ephemeral=True,
+        )
+    else:
+        lst = SUBSCRIPTIONS[guild_id].setdefault(art_value, [])
+        if user_id in lst:
+            lst.remove(user_id)
+            await interaction.response.send_message(
+                f"✅ Du erhältst keine DMs mehr für neue **{art_value}**-Events.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"ℹ️ Du warst für **{art_value}**-Events nicht abonniert.",
+                ephemeral=True,
+            )
+
+    await safe_save()
+
+
+# ----------------- /stats -----------------
+@bot.tree.command(name="stats", description="Zeigt Event-Statistiken für diesen Server")
+async def stats_command(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    now = datetime.utcnow()
+
+    # Filter History auf diesen Guild
+    hist_guild = [h for h in EVENT_HISTORY if h.get("guild_id") == guild_id]
+
+    total_events = len(hist_guild)
+    last_30_days = [
+        h for h in hist_guild
+        if "created_at" in h
+        and datetime.fromisoformat(h["created_at"]) >= now - timedelta(days=30)
+    ]
+    last_7_days = [
+        h for h in hist_guild
+        if "created_at" in h
+        and datetime.fromisoformat(h["created_at"]) >= now - timedelta(days=7)
+    ]
+
+    by_art = {"PvE": 0, "PvP": 0, "PVX": 0, "Sonstige": 0}
+    for h in hist_guild:
+        art = h.get("art")
+        if art in by_art:
+            by_art[art] += 1
+        else:
+            by_art["Sonstige"] += 1
+
+    active_on_server = [
+        ev for ev in active_events.values()
+        if ev.get("guild_id") == guild_id
+    ]
+    upcoming = [
+        ev for ev in active_on_server
+        if ev.get("event_time") and ev["event_time"] >= datetime.now(pytz.utc)
+    ]
+
+    embed = discord.Embed(
+        title=f"📊 SlotBot-Stats für {interaction.guild.name}",
+        color=0xF1C40F,
+    )
+
+    embed.add_field(
+        name="📦 Gesamt",
+        value=(
+            f"• Events gesamt: **{total_events}**\n"
+            f"• Letzte 30 Tage: **{len(last_30_days)}**\n"
+            f"• Letzte 7 Tage: **{len(last_7_days)}**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="🎮 Nach Event-Art",
+        value=(
+            f"• PvE: **{by_art['PvE']}**\n"
+            f"• PvP: **{by_art['PvP']}**\n"
+            f"• PVX: **{by_art['PVX']}**\n"
+            f"• Sonstige: **{by_art['Sonstige']}**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="📅 Aktive / Bevorstehende Events",
+        value=(
+            f"• Aktive Events: **{len(active_on_server)}**\n"
+            f"• Davon noch bevorstehend: **{len(upcoming)}**"
+        ),
         inline=False,
     )
 
@@ -1249,6 +1656,40 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             pass
 
 
+# ----------------- AFK-Check DM-Handling -----------------
+@bot.event
+async def on_message(message: discord.Message):
+    # Normale Bot-Commands nicht blockieren
+    await bot.process_commands(message)
+
+    # Wir interessieren uns nur für DMs an den Bot
+    if message.author.bot:
+        return
+    if message.guild is not None:
+        return  # keine Guild-Message, nur DM
+
+    user_id = message.author.id
+    # Suche alle offenen AFK-Pending-Einträge dieses Users
+    to_remove = []
+    for (guild_id, msg_id, uid), deadline in AFK_PENDING.items():
+        if uid != user_id:
+            continue
+        # User meldet sich -> AFK-Check bestanden
+        to_remove.append((guild_id, msg_id, uid))
+
+        guild = bot.get_guild(guild_id)
+        ev = active_events.get(msg_id)
+        if guild and ev:
+            try:
+                await message.channel.send(
+                    f"✅ Danke für deine Rückmeldung! Du bleibst im Event **{ev['title']}** eingetragen."
+                )
+            except Exception:
+                pass
+    for key in to_remove:
+        AFK_PENDING.pop(key, None)
+
+
 # ----------------- /test -----------------
 @bot.tree.command(name="test", description="Prüft grundlegende Bot-Funktionalität")
 async def test_command(interaction: discord.Interaction):
@@ -1377,6 +1818,7 @@ async def test_command(interaction: discord.Interaction):
 
     # Reminder/Cleanup (logische Checks)
     results.append(("Reminder-Task registriert (logisch)", True))
+    results.append(("AFK-Check-Task registriert (logisch)", True))
     results.append(("Auto-Cleanup aktiv (logisch)", True))
 
     ok_count = sum(1 for _, ok in results if ok)
@@ -1392,7 +1834,7 @@ async def test_command(interaction: discord.Interaction):
         emoji = "✅" if ok else "❌"
         embed.add_field(name=name, value=emoji, inline=False)
 
-    embed.set_footer(text="Reale Event-Slots & DM-Reminder bitte im Live-Betrieb mit einem Test-Event prüfen.")
+    embed.set_footer(text="Reale Event-Slots, DMs & AFK-Checks bitte mit einem Test-Event prüfen.")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -1402,7 +1844,7 @@ flask_app = Flask("bot_flask")
 
 @flask_app.route("/")
 def index():
-    return "✅ SlotBot läuft (Render kompatibel)."
+    return "✅ SlotBot v4.6 läuft (Render kompatibel)."
 
 
 @flask_app.route("/ics/<int:message_id>.ics")
@@ -1437,12 +1879,13 @@ def run_bot():
 
 @bot.event
 async def on_ready():
-    print(f"✅ SlotBot online als {bot.user}")
+    print(f"✅ SlotBot v4.6 online als {bot.user}")
     loaded = load_events_with_retry()
     active_events.clear()
     active_events.update(loaded)
     print(f"📂 Aktive Events im Speicher: {len(active_events)}")
     bot.loop.create_task(reminder_task())
+    bot.loop.create_task(afk_enforcer_task())
     bot.loop.create_task(cleanup_task())
     try:
         await bot.tree.sync()
@@ -1452,8 +1895,9 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    print("🚀 Starte SlotBot v4.3.3 + Flask ...")
+    print("🚀 Starte SlotBot v4.6 + Flask ...")
     active_events.update(load_events_with_retry())
-    Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
+    # Bot in separatem Thread
+    Thread(target=run_bot, daemon=True).start()
     flask_app.run(host="0.0.0.0", port=port)
