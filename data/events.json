@@ -1,1 +1,21 @@
-{}
+{
+    "1438443069207744536": {
+        "title": "test",
+        "slots": {
+            "\ud83c\udd99": {
+                "limit": 2,
+                "main": [],
+                "waitlist": [],
+                "reminded": []
+            }
+        },
+        "channel_id": 1420155880586088553,
+        "guild_id": 1420155879759675496,
+        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** test\n\ud83d\udccd **Ort:** zest\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 13.11.2025 09:20 CET\n\u2694\ufe0f **Levelbereich:** 1\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 404173735130562562,
+        "event_time": "2025-11-13T08:20:00+00:00",
+        "thread_id": 1438443069207744536,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-11-13T09:20:00+00:00"
+    }
+}
