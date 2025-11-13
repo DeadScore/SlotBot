@@ -488,32 +488,32 @@ async def reminder_task():
                 for user_id in list(slot["main"]):
                     seconds_left = (event_time - now).total_seconds()
 
-                    # 20-Min-Reminder
-                    if 0 <= seconds_left <= 20 * 60 and user_id not in slot["reminded"]:
-                        try:
-                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"⏰ Dein Event **{ev['title']}** startet in **20 Minuten**! "
-                                f"Bitte sei rechtzeitig online."
-                            )
-                            slot["reminded"].add(user_id)
-                        except Exception:
-                            pass
+                    # 30-Min-Reminder
+if 0 <= seconds_left <= 30 * 60 and user_id not in slot["reminded"]:
+    try:
+        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+        await member.send(
+            f"⏰ Dein Event **{ev['title']}** startet in **30 Minuten**! "
+            f"Bitte sei rechtzeitig online."
+        )
+        slot["reminded"].add(user_id)
+    except Exception:
+        pass
 
-                    # 10-Min-AFK-Check
-                    if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
-                        try:
-                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
-                                f"Das Event startet in **10 Minuten**.\n"
-                                f"Bitte antworte in den nächsten **2 Minuten** hier im Chat, "
-                                f"sonst wirst du automatisch aus deinem Slot entfernt."
-                            )
-                            slot["afk_dm_sent"].add(user_id)
-                            AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=2)
-                        except Exception:
-                            pass
+# 15-Min-AFK-Check
+if 0 <= seconds_left <= 15 * 60 and user_id not in slot["afk_dm_sent"]:
+    try:
+        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+        await member.send(
+            f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
+            f"Das Event startet in **15 Minuten**.\n"
+            f"Bitte antworte in den nächsten **5 Minuten** hier im Chat, "
+            f"sonst wirst du automatisch aus deinem Slot entfernt."
+        )
+        slot["afk_dm_sent"].add(user_id)
+        AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=5)
+    except Exception:
+        pass
         await asyncio.sleep(30)
 
 
