@@ -1,9 +1,15 @@
-# main.py — SlotBot v4.3.3 (Text-Events, keine Embeds für Event-Posts)
-# Features:
+# main.py — SlotBot v4.3.3 (Text-Version, ohne Embeds für Event-Posts)
+# Changelog (dieser Stand):
+# - Event-Post: hübsch formatierter Text (Variante B, keine Embeds)
+# - Ephemere /event-Bestätigung als Embed (Farbe nach Art: PvE/PvP/PVX)
+# - Auto-Cleanup: Event + Thread werden nach X Stunden nach Eventstart gelöscht (Standard: 1h)
+# - /event: optionales Feld auto_delete_stunden (Range 1–168)
+# - /event_edit: Datum/Zeit tolerant (22, 22.15, 22:15, 22 Uhr), Auto-Löschzeit wird mitverschoben
+# - /help aktualisiert für auto_delete_stunden & neues Verhalten
+#
+# Features (wie vorher + Erweiterungen):
 # - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help
-# - Event-Posts als Klartext (kein Embed), mit Fake-Box-Style (Variante B)
 # - Deutsche Wochentage im Datum
-# - Art mit farbigen Emojis (PvE/PvP/PVX)
 # - Strike-Through bei Änderungen (nur letzte alte Angabe)
 # - Thread-Logs (robust: ent-archivieren/neu erstellen)
 # - 10-Minuten-Reminder per DM
@@ -15,10 +21,10 @@
 #
 # ENV Variablen (Render > Environment):
 # - DISCORD_TOKEN           (required)
-# - GITHUB_TOKEN            (required, scope: repo)
-# - GITHUB_REPO             (optional, default: DeadScore/SlotBot)
-# - GITHUB_FILE_PATH        (optional, default: data/events.json)
-# - PUBLIC_BASE_URL         (optional, e.g. https://slotbot-xxxx.onrender.com)  # für klickbaren ICS-Link
+# - GITHUB_TOKEN           (required, scope: repo)
+# - GITHUB_REPO            (optional, default: DeadScore/SlotBot)
+# - GITHUB_FILE_PATH       (optional, default: data/events.json)
+# - PUBLIC_BASE_URL        (optional, e.g. https://slotbot-xxxx.onrender.com)
 #
 # Python >= 3.9
 
@@ -85,6 +91,12 @@ ART_EMOJI = {
     "PvE": "🟢",
     "PvP": "🔴",
     "PVX": "🟣",
+}
+
+ART_COLOR = {
+    "PvE": discord.Color.green(),
+    "PvP": discord.Color.red(),
+    "PVX": discord.Color.purple(),
 }
 
 
@@ -185,7 +197,9 @@ def parse_slots(slots_str: str, guild: discord.Guild):
 
 
 def format_event_text(event, guild: discord.Guild):
-    text = "🎟️ **Slots:**\n"
+    text = "🎟️ **Slots & Teilnehmer:**\n"
+    if not event["slots"]:
+        return text + "\n(Keine Slots definiert.)"
     for emoji, slot in event["slots"].items():
         main_users = [guild.get_member(uid).mention for uid in slot["main"] if guild.get_member(uid)]
         wait_users = [guild.get_member(uid).mention for uid in slot["waitlist"] if guild.get_member(uid)]
@@ -282,6 +296,17 @@ def load_events_once():
                             ev[key] = int(ev[key])
                         except Exception:
                             pass
+                # Datumswerte zurückkonvertieren
+                if isinstance(ev.get("event_time"), str):
+                    try:
+                        ev["event_time"] = datetime.fromisoformat(ev["event_time"])
+                    except Exception:
+                        ev["event_time"] = None
+                if isinstance(ev.get("delete_at"), str):
+                    try:
+                        ev["delete_at"] = datetime.fromisoformat(ev["delete_at"])
+                    except Exception:
+                        ev["delete_at"] = None
                 for s in ev.get("slots", {}).values():
                     s["main"] = set(s.get("main", []))
                     s["waitlist"] = list(s.get("waitlist", []))
@@ -322,10 +347,22 @@ def save_events():
 
         serializable: Dict[str, Any] = {}
         for mid, ev in active_events.items():
-            copy = json.loads(json.dumps(ev))
-            for s in copy["slots"].values():
-                s["main"] = list(s["main"])
-                s["reminded"] = list(s["reminded"])
+            copy: Dict[str, Any] = {}
+            for key, value in ev.items():
+                if key in ("event_time", "delete_at") and isinstance(value, datetime):
+                    copy[key] = value.isoformat()
+                elif key == "slots":
+                    slots_copy: Dict[str, Any] = {}
+                    for emoji, s in value.items():
+                        slots_copy[emoji] = {
+                            "limit": s["limit"],
+                            "main": list(s["main"]),
+                            "waitlist": list(s["waitlist"]),
+                            "reminded": list(s["reminded"]),
+                        }
+                    copy["slots"] = slots_copy
+                else:
+                    copy[key] = value
             serializable[str(mid)] = copy
 
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
@@ -387,6 +424,44 @@ async def reminder_task():
                             slot["reminded"].add(user_id)
                         except Exception:
                             pass
+        await asyncio.sleep(60)
+
+
+# ----------------- Auto-Cleanup -----------------
+async def cleanup_task():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        to_delete = []
+        for msg_id, ev in list(active_events.items()):
+            delete_at = ev.get("delete_at")
+            if isinstance(delete_at, datetime):
+                if delete_at.tzinfo is None:
+                    delete_at = delete_at.replace(tzinfo=pytz.utc)
+                if now >= delete_at:
+                    to_delete.append((msg_id, ev))
+        for msg_id, ev in to_delete:
+            guild = bot.get_guild(ev["guild_id"])
+            if not guild:
+                active_events.pop(msg_id, None)
+                continue
+            channel = guild.get_channel(ev["channel_id"])
+            try:
+                if channel:
+                    try:
+                        msg = await channel.fetch_message(msg_id)
+                        await msg.delete()
+                    except Exception:
+                        pass
+                thread = guild.get_channel(ev.get("thread_id"))
+                if thread:
+                    try:
+                        await thread.delete()
+                    except Exception:
+                        pass
+            finally:
+                active_events.pop(msg_id, None)
+                await safe_save()
         await asyncio.sleep(60)
 
 
@@ -544,6 +619,7 @@ async def on_ready():
     active_events.update(loaded)
     print(f"📂 Aktive Events im Speicher: {len(active_events)}")
     bot.loop.create_task(reminder_task())
+    bot.loop.create_task(cleanup_task())
     try:
         await bot.tree.sync()
         print("📂 Slash Commands synchronisiert")
@@ -565,23 +641,24 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="🆕 /event",
         value=(
-            "**Beschreibung:** Erstellt ein neues Event mit Slots und Thread.\n"
+            "**Beschreibung:** Erstellt ein neues Event mit Slots, Thread, Kalenderlinks und Auto-Cleanup.\n"
             "**Pflichtfelder:** `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
-            "**Optional:** `typ`, `gruppenlead`, `anmerkung`\n"
-            "**Datum/Zeit:** Wochentag wird automatisch angehängt.\n"
+            "**Optional:** `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Standard: 1h nach Start)\n"
             "**Beispiel:**\n"
-            "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 level:61+ stil:\"Organisiert\" "
-            "slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\" anmerkung:\"Treffpunkt vor der Bank\"`"
+            "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00 `\n"
+            "`level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" typ:\"Gruppe\" gruppenlead:\"Matze\"`\n"
+            "`anmerkung:\"Treffpunkt vor der Bank\" auto_delete_stunden:3`"
         ),
         inline=False,
     )
     embed.add_field(
         name="✏️ /event_edit",
         value=(
-            "**Beschreibung:** Bearbeitet **dein** Event (nur Ersteller).\n"
+            "**Beschreibung:** Bearbeitet **dein** aktuelles Event (nur Ersteller).\n"
             "**Unterstützt:** `datum`, `zeit`, `ort`, `level`, `anmerkung`, `slots`\n"
             "**Anzeige:** Alte Werte werden `~~durchgestrichen~~ → neu` angezeigt (nur letzte Änderung).\n"
             "**Hinweis:** Zeit-Eingaben wie `22`, `22.15`, `22:15` oder `22 Uhr` sind erlaubt.\n"
+            "Die Auto-Löschzeit bleibt relativ zum Eventstart erhalten."
         ),
         inline=False,
     )
@@ -630,6 +707,7 @@ async def help_command(interaction: discord.Interaction):
     typ="Optional: Gruppe oder Raid",
     gruppenlead="Optional: Gruppenleiter",
     anmerkung="Optional: Freitext",
+    auto_delete_stunden="Nach wie vielen Stunden nach Eventstart das Event automatisch gelöscht werden soll (Standard: 1)",
 )
 @app_commands.choices(
     art=[app_commands.Choice(name=x, value=x) for x in ["PvE", "PvP", "PVX"]],
@@ -649,6 +727,7 @@ async def event(
     typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
     anmerkung: str = None,
+    auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
     # Datum/Zeit prüfen
     try:
@@ -673,21 +752,19 @@ async def event(
         await interaction.response.send_message(f"❌ {slot_dict}", ephemeral=True)
         return
 
-    # Header bauen (Fake-Box-Style, reiner Text)
+    # Header bauen (Text, Variante B)
     time_str = format_de_datetime(local_dt)
-    art_emoji = ART_EMOJI.get(art.value, "🟦")
-    title_line = f"{art_emoji} **{art.value} – Neue Gruppensuche!**"
+    art_emoji = ART_EMOJI.get(art.value, "🗡️")
     sep = "─────────────────────────────────"
 
-    header_lines = [
-        title_line,
-        sep,
-        f"🎯 **Zweck:** {zweck}",
-        f"📍 **Ort:** {ort}",
-        f"🕒 **Datum/Zeit:** {time_str}",
-        f"⚔️ **Levelbereich:** {level}",
-        f"💬 **Stil:** {stil.value}",
-    ]
+    header_lines = []
+    header_lines.append(f"{art_emoji} **{art.value} – Neue Gruppensuche!**")
+    header_lines.append(sep)
+    header_lines.append(f"🎯 **Zweck:** {zweck}")
+    header_lines.append(f"📍 **Ort:** {ort}")
+    header_lines.append(f"🕒 **Datum/Zeit:** {time_str}")
+    header_lines.append(f"⚔️ **Levelbereich:** {level}")
+    header_lines.append(f"💬 **Stil:** {stil.value}")
     if typ:
         header_lines.append(f"🏷️ **Typ:** {typ.value}")
     if gruppenlead:
@@ -698,7 +775,18 @@ async def event(
 
     header = "\n".join(header_lines)
 
-    await interaction.response.send_message("✅ Event erstellt!", ephemeral=True)
+    # Ephemeral Bestätigung als hübsches Embed
+    color = ART_COLOR.get(art.value, discord.Color.blue())
+    confirm = discord.Embed(
+        title="✅ Event erstellt",
+        description=f"{art_emoji} **{zweck}**",
+        color=color,
+    )
+    confirm.add_field(name="📍 Ort", value=ort, inline=True)
+    confirm.add_field(name="🕒 Start", value=time_str, inline=True)
+    confirm.add_field(name="⚔️ Level", value=level, inline=True)
+    confirm.add_field(name="⏱️ Auto-Löschung", value=f"{auto_delete_stunden}h nach Start", inline=True)
+    await interaction.response.send_message(embed=confirm, ephemeral=True)
 
     # Nachricht absenden
     try:
@@ -746,6 +834,8 @@ async def event(
     except Exception as e:
         print(f"⚠️ Thread konnte nicht erstellt werden: {e}")
 
+    delete_at = utc_dt + timedelta(hours=int(auto_delete_stunden))
+
     active_events[msg.id] = {
         "title": zweck,
         "slots": slot_dict,
@@ -755,6 +845,8 @@ async def event(
         "creator_id": interaction.user.id,
         "event_time": utc_dt,
         "thread_id": thread_id,
+        "auto_delete_stunden": int(auto_delete_stunden),
+        "delete_at": delete_at,
     }
     await safe_save()
 
@@ -801,9 +893,11 @@ async def event_edit(
     PREFIX_ORG = "📍 **Ort:**"
     PREFIX_LEVEL = "⚔️ **Levelbereich:**"
 
+    old_event_time = ev["event_time"]
+
     # Datum/Zeit
     if datum or zeit:
-        old_local = ev["event_time"].astimezone(BERLIN_TZ)
+        old_local = old_event_time.astimezone(BERLIN_TZ)
         try:
             fallback_time = old_local.strftime("%H:%M")
             time_str = parse_time_tolerant(zeit, fallback_time) if zeit else fallback_time
@@ -818,7 +912,15 @@ async def event_edit(
             if not current_visible:
                 current_visible = format_de_datetime(old_local)
             ev["header"] = replace_with_struck(ev["header"], PREFIX_DATE, current_visible, new_str)
-            ev["event_time"] = new_local.astimezone(pytz.utc)
+            new_event_time = new_local.astimezone(pytz.utc)
+
+            # Auto-Delete relativ verschieben
+            delete_at = ev.get("delete_at")
+            if isinstance(delete_at, datetime):
+                offset = delete_at - old_event_time
+                ev["delete_at"] = new_event_time + offset
+
+            ev["event_time"] = new_event_time
             thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
             await interaction.response.send_message(
@@ -854,7 +956,7 @@ async def event_edit(
                 ev["header"],
             )
         else:
-            # Vor die untere Trennlinie einfügen
+            # Vor der unteren Trennlinie einfügen
             if "─────────────────────────────────" in ev["header"]:
                 ev["header"] = ev["header"].replace(
                     "─────────────────────────────────",
