@@ -20,6 +20,27 @@
         "delete_at": "2025-11-14T22:00:00+00:00",
         "art": "PVX"
     },
+    "1438902321303257280": {
+        "title": "Sportfischen und Stream schauen",
+        "slots": {
+            "<:Balderag:795277777392631808>": {
+                "limit": 222,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Sportfischen und Stream schauen\n\ud83d\udccd **Ort:** Wasser\n\ud83d\udd52 **Datum/Zeit:** Freitag, 14.11.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** egal\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83d\udcdd **Anmerkung:** W\u00e4rend dem Stream etwas Angeln. // der PTR wird wohl um 18 Uhr gewiped\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 404173735130562562,
+        "event_time": "2025-11-14T19:00:00+00:00",
+        "thread_id": 1438902321303257280,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-11-14T20:00:00+00:00",
+        "art": "PVX"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -113,6 +134,14 @@
             "art": "PVX",
             "created_at": "2025-11-13T22:08:57.180714",
             "event_time": "2025-11-14T21:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 404173735130562562,
+            "title": "Sportfischen und Stream schauen",
+            "art": "PVX",
+            "created_at": "2025-11-14T14:44:08.846177",
+            "event_time": "2025-11-14T19:00:00+00:00"
         }
     ]
 }
