@@ -820,7 +820,7 @@ async def help_command(interaction: discord.Interaction):
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
             "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            "`/event art:PvE zweck:'XP Farmen' ort:"Calpheon" datum:27.10.2025 zeit:20:00`\n"
+            "`/event art:PvE zweck:'XP Farmen' ort:'Calpheon' datum:27.10.2025 zeit:20:00`\n"
             "`level:61+ stil:'Organisiert' slots:'⚔️:3 🛡️:1 💉:2' auto_delete_stunden:3`\n"
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
