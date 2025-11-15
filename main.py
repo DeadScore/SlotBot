@@ -1,22 +1,3 @@
-# main.py — SlotBot v5.0 (mit DKP/Punktesystem)
-#
-# Features:
-# - /event, /event_edit, /event_delete, /event_list (/events), /event_info, /help, /test
-# - /subscribe, /unsubscribe, /stats
-# - Textbasierter Event-Post, ephemere /event-Bestätigung als Embed
-# - Auto-Cleanup: Event + Thread löschen sich X Stunden nach Start (Default 1h)
-# - Reminder 20 Minuten vor Eventstart (DM)
-# - AFK-Check 10 Minuten vor Eventstart (DM + Auto-Kick bei Nicht-Reaktion)
-# - Kalenderlinks (Google + Apple .ics im Thread)
-# - Reaction-Slots mit Warteliste
-# - Event-Historie für /stats
-# - Abonnements pro Event-Art (PvE/PvP/PVX)
-# - NEU: DKP-ähnliches Punktesystem (pro Server + User gespeichert)
-#   - /points_add, /points_remove, /points, /points_top
-#   - /points_add_voice (alle im Voice)
-#   - /points_add_multi (mehrere Mentions)
-#   - /points_add_event (Teilnehmer deines letzten Events)
-#   - /points_add_event_id (Teilnehmer eines Events per Message-ID/Link)
 
 import os
 import re
@@ -26,7 +7,7 @@ import asyncio
 import base64
 from datetime import datetime, timedelta
 from threading import Thread
-from typing import Dict, Any, List, Tuple, Set
+from typing import Dict, Any, List, Tuple
 
 import requests
 import pytz
@@ -81,8 +62,6 @@ POINTS: Dict[int, Dict[int, int]] = {}
 BACKGROUND_TASKS: Dict[str, asyncio.Task] = {}
 TASKS_STARTED = False
 
-# Mention-Regex für Multi-Punkte
-MENTION_REGEX = re.compile(r"<@!?(?P<id>\d+)>")
 
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
@@ -152,7 +131,7 @@ def build_ics_content(title: str, start_utc: datetime, duration_hours: int, loca
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//SlotBot//v5.0//EN",
+        "PRODID:-//SlotBot//v4.6//EN",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}",
@@ -336,14 +315,14 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
                         g_id = int(g_id_str)
                     except Exception:
                         continue
-                    inner_pts: Dict[int, int] = {}
+                    inner: Dict[int, int] = {}
                     if isinstance(mapping, dict):
-                        for u_id_str, val in mapping.items():
+                        for u_id_str, value in mapping.items():
                             try:
-                                inner_pts[int(u_id_str)] = int(val)
+                                inner[int(u_id_str)] = int(value)
                             except Exception:
                                 continue
-                    pts[g_id] = inner_pts
+                    pts[g_id] = inner
                 POINTS = pts
             else:
                 POINTS = {}
@@ -452,17 +431,17 @@ def save_events():
         # Punkte (DKP)
         points_out: Dict[str, Dict[str, int]] = {}
         for g_id, mapping in POINTS.items():
-            inner_pts: Dict[str, int] = {}
-            for u_id, val in mapping.items():
-                inner_pts[str(u_id)] = int(val)
-            points_out[str(g_id)] = inner_pts
+            inner: Dict[str, int] = {}
+            for u_id, value in mapping.items():
+                inner[str(u_id)] = int(value)
+            points_out[str(g_id)] = inner
         serializable["_points"] = points_out
 
         # History
         serializable["_history"] = EVENT_HISTORY
 
         encoded_content = base64.b64encode(json.dumps(serializable, indent=4).encode()).decode()
-        data = {"message": "Update events.json via SlotBot v5.0", "content": encoded_content}
+        data = {"message": "Update events.json via SlotBot v4.6", "content": encoded_content}
         if sha:
             data["sha"] = sha
         resp = requests.put(url, headers=gh_headers(), json=data, timeout=10)
@@ -532,13 +511,11 @@ async def reminder_task():
             event_time = ev.get("event_time")
             if not event_time:
                 continue
-
             for emoji, slot in ev["slots"].items():
                 if "reminded" not in slot:
                     slot["reminded"] = set()
                 if "afk_dm_sent" not in slot:
                     slot["afk_dm_sent"] = set()
-
                 for user_id in list(slot["main"]):
                     seconds_left = (event_time - now).total_seconds()
 
@@ -568,7 +545,6 @@ async def reminder_task():
                             AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=5)
                         except Exception:
                             pass
-
         await asyncio.sleep(30)
 
 
@@ -831,10 +807,10 @@ async def log_participation_change(
 @bot.tree.command(name="help", description="Zeigt eine ausführliche Erklärung aller Befehle an")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📖 SlotBot v5.0 – Hilfe",
+        title="📖 SlotBot v4.6 – Hilfe",
         description=(
             "Der SlotBot hilft dir, Events mit Slots zu erstellen und zu verwalten.\n"
-            "Hier ein Überblick über die wichtigsten Befehle."
+            "Hier ein Überblick über die Befehle."
         ),
         color=0x5865F2,
     )
@@ -845,8 +821,8 @@ async def help_command(interaction: discord.Interaction):
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
             "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            "`/event art:PvE zweck:\"XP Farmen\" ort:\"Calpheon\" datum:27.10.2025 zeit:20:00`\n"
-            "`level:61+ stil:\"Organisiert\" slots:\"⚔️:3 🛡️:1 💉:2\" auto_delete_stunden:3`\n"
+            "`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:27.10.2025 zeit:20:00`\n"
+            "`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n"
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
         ),
@@ -895,8 +871,10 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="🏅 Punkte-System",
         value=(
-            "`/points_add`, `/points_remove`, `/points`, `/points_top`\n"
-            "`/points_add_voice`, `/points_add_multi`, `/points_add_event`, `/points_add_event_id`"
+            "`/points_add` – Punkte vergeben (öffentlich sichtbar)\n"
+            "`/points_remove` – Punkte abziehen (öffentlich sichtbar)\n"
+            "`/points` – Punkte eines Spielers anzeigen\n"
+            "`/points_top` – Leaderboard anzeigen"
         ),
         inline=False,
     )
@@ -1135,7 +1113,7 @@ async def event_edit(
         return
 
     msg_id, ev = found
-    thread_changes: List[str] = []
+    thread_changes = []
 
     PREFIX_DATE = "🕒 **Datum/Zeit:**"
     PREFIX_ORG = "📍 **Ort:**"
@@ -1578,10 +1556,10 @@ async def stats_command(interaction: discord.Interaction):
         inline=False,
     )
 
-    # Punkte-Überblick
+    # Punkte-Statistik
     guild_points = POINTS.get(guild_id, {})
-    if guild_points:
-        total_points_entries = len(guild_points)
+    total_points_entries = len(guild_points)
+    if total_points_entries > 0:
         avg_points = sum(guild_points.values()) / total_points_entries
         embed.add_field(
             name="🏅 Punkte-System",
@@ -1595,7 +1573,7 @@ async def stats_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ----------------- Punkte-Commands (DKP) -----------------
+# ----------------- Punkte-System Commands -----------------
 @app_commands.describe(
     member="Spieler, der Punkte bekommen soll",
     amount="Anzahl der Punkte",
@@ -1627,14 +1605,15 @@ async def points_add(
 
     await safe_save()
 
-    text = (
-        f"✅ {member.mention} erhält **{amount}** Punkte.\n"
+    # Öffentliche Nachricht im Channel
+    text_public = (
+        f"🏅 {interaction.user.mention} hat {member.mention} **{amount}** Punkte gegeben.\n"
         f"Neuer Stand: **{new_points}** Punkte."
     )
     if reason:
-        text += f"\n📝 Grund: {reason}"
+        text_public += f"\n📝 Grund: {reason}"
 
-    await interaction.response.send_message(text, ephemeral=True)
+    await interaction.response.send_message(text_public)
 
 
 @app_commands.describe(
@@ -1668,14 +1647,15 @@ async def points_remove(
 
     await safe_save()
 
-    text = (
-        f"✅ {member.mention} verliert **{amount}** Punkte.\n"
+    # Öffentliche Nachricht im Channel
+    text_public = (
+        f"⚖️ {interaction.user.mention} hat {member.mention} **{amount}** Punkte abgezogen.\n"
         f"Neuer Stand: **{new_points}** Punkte."
     )
     if reason:
-        text += f"\n📝 Grund: {reason}"
+        text_public += f"\n📝 Grund: {reason}"
 
-    await interaction.response.send_message(text, ephemeral=True)
+    await interaction.response.send_message(text_public)
 
 
 @app_commands.describe(
@@ -1740,417 +1720,6 @@ async def points_top(
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# Punkte an alle im Voice-Channel
-@app_commands.describe(
-    voice_channel="Voice-Channel, dessen Teilnehmer Punkte bekommen sollen",
-    amount="Punkte pro Spieler",
-    reason="Optional: Grund für die Punktevergabe",
-)
-@bot.tree.command(name="points_add_voice", description="Gibt allen Spielern in einem Voice-Channel Punkte")
-async def points_add_voice(
-    interaction: discord.Interaction,
-    voice_channel: discord.VoiceChannel,
-    amount: app_commands.Range[int, 1, 100000],
-    reason: str = None,
-):
-    if not can_edit_points(interaction):
-        await interaction.response.send_message(
-            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
-            ephemeral=True,
-        )
-        return
-
-    members = [m for m in voice_channel.members if not m.bot]
-    if not members:
-        await interaction.response.send_message(
-            f"ℹ️ Im Voice-Channel {voice_channel.mention} ist aktuell niemand (oder nur Bots).",
-            ephemeral=True,
-        )
-        return
-
-    guild_id = interaction.guild.id
-    if guild_id not in POINTS:
-        POINTS[guild_id] = {}
-
-    changed: List[Tuple[discord.Member, int]] = []
-
-    for member in members:
-        user_id = member.id
-        old_points = POINTS[guild_id].get(user_id, 0)
-        new_points = old_points + amount
-        POINTS[guild_id][user_id] = new_points
-        changed.append((member, new_points))
-
-    await safe_save()
-
-    lines = [
-        f"✅ **{len(changed)}** Spieler im Voice {voice_channel.mention} erhalten jeweils **{amount}** Punkte."
-    ]
-
-    max_list = 20
-    for member, new_points in changed[:max_list]:
-        lines.append(f"- {member.mention}: jetzt **{new_points}** Punkte")
-
-    if len(changed) > max_list:
-        lines.append(f"... und **{len(changed) - max_list}** weitere.")
-
-    if reason:
-        lines.append(f"📝 Grund: {reason}")
-
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
-
-
-# Punkte an mehrere per Mention
-@app_commands.describe(
-    targets="Liste von Spielern als Erwähnungen (z. B. @A @B @C)",
-    amount="Punkte pro Spieler",
-    reason="Optional: Grund für die Punktevergabe",
-)
-@bot.tree.command(name="points_add_multi", description="Gibt mehreren Spielern gleichzeitig Punkte")
-async def points_add_multi(
-    interaction: discord.Interaction,
-    amount: app_commands.Range[int, 1, 100000],
-    targets: str,
-    reason: str = None,
-):
-    if not can_edit_points(interaction):
-        await interaction.response.send_message(
-            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
-            ephemeral=True,
-        )
-        return
-
-    if not targets:
-        await interaction.response.send_message(
-            "❌ Du musst mindestens einen Spieler erwähnen (z. B. `@A @B @C`).",
-            ephemeral=True,
-        )
-        return
-
-    ids: Set[int] = {int(m.group("id")) for m in MENTION_REGEX.finditer(targets)}
-    if not ids:
-        await interaction.response.send_message(
-            "❌ Ich konnte keine gültigen Spieler-Erwähnungen im Text finden.",
-            ephemeral=True,
-        )
-        return
-
-    members: List[discord.Member] = []
-    for uid in ids:
-        member = interaction.guild.get_member(uid)
-        if member and not member.bot:
-            members.append(member)
-
-    if not members:
-        await interaction.response.send_message(
-            "ℹ️ Keine passenden Spieler gefunden (Bots werden ignoriert).",
-            ephemeral=True,
-        )
-        return
-
-    guild_id = interaction.guild.id
-    if guild_id not in POINTS:
-        POINTS[guild_id] = {}
-
-    changed: List[Tuple[discord.Member, int]] = []
-    for member in members:
-        user_id = member.id
-        old_points = POINTS[guild_id].get(user_id, 0)
-        new_points = old_points + amount
-        POINTS[guild_id][user_id] = new_points
-        changed.append((member, new_points))
-
-    await safe_save()
-
-    lines = [
-        f"✅ **{len(changed)}** Spieler erhalten jeweils **{amount}** Punkte."
-    ]
-
-    max_list = 20
-    for member, new_points in changed[:max_list]:
-        lines.append(f"- {member.mention}: jetzt **{new_points}** Punkte")
-
-    if len(changed) > max_list:
-        lines.append(f"... und **{len(changed) - max_list}** weitere.")
-
-    if reason:
-        lines.append(f"📝 Grund: {reason}")
-
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
-
-
-# Punkte für Teilnehmer deines aktuellen Events
-@app_commands.describe(
-    amount="Punkte pro Spieler",
-    include_waitlist="Sollen auch Spieler auf der Warteliste Punkte bekommen?",
-)
-@bot.tree.command(
-    name="points_add_event",
-    description="Gibt allen Teilnehmern deines aktuellen Events Punkte"
-)
-async def points_add_event(
-    interaction: discord.Interaction,
-    amount: app_commands.Range[int, 1, 100000],
-    include_waitlist: bool = False,
-):
-    if not can_edit_points(interaction):
-        await interaction.response.send_message(
-            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
-            ephemeral=True,
-        )
-        return
-
-    found = get_latest_user_event(interaction.guild.id, interaction.user.id)
-    if not found:
-        await interaction.response.send_message(
-            "ℹ️ Ich finde aktuell kein Event von dir auf diesem Server.",
-            ephemeral=True,
-        )
-        return
-
-    msg_id, ev = found
-    guild = interaction.guild
-    guild_id = guild.id
-
-    if guild_id not in POINTS:
-        POINTS[guild_id] = {}
-
-    user_ids: Set[int] = set()
-    for emoji, slot in ev["slots"].items():
-        for uid in slot["main"]:
-            user_ids.add(uid)
-        if include_waitlist:
-            for uid in slot["waitlist"]:
-                user_ids.add(uid)
-
-    members: List[discord.Member] = []
-    for uid in user_ids:
-        member = guild.get_member(uid)
-        if member and not member.bot:
-            members.append(member)
-
-    if not members:
-        await interaction.response.send_message(
-            "ℹ️ Für dein aktuelles Event sind keine passenden Teilnehmer eingetragen.",
-            ephemeral=True,
-        )
-        return
-
-    changed: List[Tuple[discord.Member, int]] = []
-    for member in members:
-        old_points = POINTS[guild_id].get(member.id, 0)
-        new_points = old_points + amount
-        POINTS[guild_id][member.id] = new_points
-        changed.append((member, new_points))
-
-    await safe_save()
-
-    embed = discord.Embed(
-        title="🏅 Punkte für Event-Teilnehmer vergeben",
-        color=0xF39C12,
-    )
-
-    embed.add_field(
-        name="Event",
-        value=f"**{ev['title']}**",
-        inline=False,
-    )
-    embed.add_field(
-        name="Punkte pro Spieler",
-        value=f"**{amount}**",
-        inline=True,
-    )
-    embed.add_field(
-        name="Spieler",
-        value=f"**{len(changed)}**",
-        inline=True,
-    )
-    embed.add_field(
-        name="Warteliste einbezogen",
-        value="✅ Ja" if include_waitlist else "❌ Nein",
-        inline=True,
-    )
-
-    details_lines: List[str] = []
-    max_list = 20
-    for member, new_points in changed[:max_list]:
-        details_lines.append(f"- {member.mention}: jetzt **{new_points}** Punkte")
-
-    if len(changed) > max_list:
-        details_lines.append(f"... und **{len(changed) - max_list}** weitere.")
-
-    embed.add_field(
-        name="Details",
-        value="\n".join(details_lines),
-        inline=False,
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# Punkte für Teilnehmer eines Events per Message-ID/Link
-@app_commands.describe(
-    message="Nachrichten-Link oder ID der Event-Nachricht",
-    amount="Punkte pro Spieler",
-    include_waitlist="Sollen auch Spieler auf der Warteliste Punkte bekommen?",
-)
-@bot.tree.command(
-    name="points_add_event_id",
-    description="Gibt allen Teilnehmern eines Events (per Nachrichten-ID/Link) Punkte"
-)
-async def points_add_event_id(
-    interaction: discord.Interaction,
-    message: str,
-    amount: app_commands.Range[int, 1, 100000],
-    include_waitlist: bool = False,
-):
-    if not can_edit_points(interaction):
-        await interaction.response.send_message(
-            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
-            ephemeral=True,
-        )
-        return
-
-    message = message.strip()
-    msg_id = None
-
-    # Falls kompletter Link: letzte Zahl als ID
-    m = re.search(r"/(\d+)$", message)
-    if m:
-        try:
-            msg_id = int(m.group(1))
-        except ValueError:
-            msg_id = None
-
-    # Falls nur ID
-    if msg_id is None:
-        try:
-            msg_id = int(message)
-        except ValueError:
-            await interaction.response.send_message(
-                "❌ Konnte aus dem Parameter keine gültige Nachrichten-ID lesen. "
-                "Bitte gib entweder die reine ID oder den vollständigen Link zur Event-Nachricht an.",
-                ephemeral=True,
-            )
-            return
-
-    ev = active_events.get(msg_id)
-
-    if not ev:
-        try:
-            loop = asyncio.get_running_loop()
-            fresh = await loop.run_in_executor(None, load_events_with_retry)
-            if fresh:
-                active_events.clear()
-                active_events.update(fresh)
-                ev = active_events.get(msg_id)
-        except Exception:
-            ev = None
-
-    if not ev:
-        await interaction.response.send_message(
-            "❌ Zu dieser Nachrichten-ID konnte ich kein Event finden.",
-            ephemeral=True,
-        )
-        return
-
-    if ev.get("guild_id") != interaction.guild.id:
-        await interaction.response.send_message(
-            "❌ Dieses Event gehört nicht zu diesem Server.",
-            ephemeral=True,
-        )
-        return
-
-    guild = interaction.guild
-    guild_id = guild.id
-
-    if guild_id not in POINTS:
-        POINTS[guild_id] = {}
-
-    user_ids: Set[int] = set()
-    for emoji, slot in ev["slots"].items():
-        for uid in slot["main"]:
-            user_ids.add(uid)
-        if include_waitlist:
-            for uid in slot["waitlist"]:
-                user_ids.add(uid)
-
-    members: List[discord.Member] = []
-    for uid in user_ids:
-        member = guild.get_member(uid)
-        if member and not member.bot:
-            members.append(member)
-
-    if not members:
-        await interaction.response.send_message(
-            "ℹ️ Dieses Event hat keine passenden Teilnehmer (oder nur Bots).",
-            ephemeral=True,
-        )
-        return
-
-    changed: List[Tuple[discord.Member, int]] = []
-    for member in members:
-        old_points = POINTS[guild_id].get(member.id, 0)
-        new_points = old_points + amount
-        POINTS[guild_id][member.id] = new_points
-        changed.append((member, new_points))
-
-    await safe_save()
-
-    title = ev.get("title", "Unbekanntes Event")
-    channel_id = ev.get("channel_id")
-    jump_url = None
-    if channel_id:
-        jump_url = f"https://discord.com/channels/{guild.id}/{channel_id}/{msg_id}"
-
-    embed = discord.Embed(
-        title="🏅 Punkte für Event-Teilnehmer vergeben (per ID)",
-        color=0x9B59B6,
-    )
-
-    base_info_lines = [f"**Titel:** {title}"]
-    if jump_url:
-        base_info_lines.append(f"[Zum Event springen]({jump_url})")
-
-    embed.add_field(
-        name="Event",
-        value="\n".join(base_info_lines),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Punkte pro Spieler",
-        value=f"**{amount}**",
-        inline=True,
-    )
-    embed.add_field(
-        name="Spieler",
-        value=f"**{len(changed)}**",
-        inline=True,
-    )
-    embed.add_field(
-        name="Warteliste einbezogen",
-        value="✅ Ja" if include_waitlist else "❌ Nein",
-        inline=True,
-    )
-
-    details_lines: List[str] = []
-    max_list = 20
-    for member, new_points in changed[:max_list]:
-        details_lines.append(f"- {member.mention}: jetzt **{new_points}** Punkte")
-
-    if len(changed) > max_list:
-        details_lines.append(f"... und **{len(changed) - max_list}** weitere.")
-
-    embed.add_field(
-        name="Details",
-        value="\n".join(details_lines),
-        inline=False,
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
 # ----------------- Reaction Handling -----------------
 async def _fetch_message_with_retry(channel: discord.abc.Messageable, message_id: int, tries: int = 3):
     for _ in range(tries):
@@ -2159,6 +1728,46 @@ async def _fetch_message_with_retry(channel: discord.abc.Messageable, message_id
         except Exception:
             await asyncio.sleep(1)
     return None
+
+
+
+@app_commands.describe(
+    limit="Wie viele Spieler sollen angezeigt werden? (Standard: 10)",
+)
+@bot.tree.command(name="points_top_public", description="Zeigt das Punkte-Leaderboard öffentlich im Channel")
+async def points_top_public(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 1, 50] = 10,
+):
+    guild_id = interaction.guild.id
+    guild_points = POINTS.get(guild_id, {})
+
+    if not guild_points:
+        await interaction.response.send_message(
+            "ℹ️ Es sind noch keine Punkte für diesen Server gespeichert.",
+            ephemeral=False,
+        )
+        return
+
+    sorted_entries = sorted(
+        guild_points.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[:limit]
+
+    lines = []
+    for idx, (user_id, pts) in enumerate(sorted_entries, start=1):
+        member = interaction.guild.get_member(user_id)
+        name = member.mention if member else f"<@{user_id}>"
+        lines.append(f"**#{idx}** – {name}: **{pts}** Punkte")
+
+    embed = discord.Embed(
+        title="🏆 Öffentliches Punkte-Leaderboard",
+        description="\n".join(lines),
+        color=0xFFD700,
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 @bot.event
@@ -2315,7 +1924,7 @@ async def on_message(message: discord.Message):
 
     user_id = message.author.id
     # Suche alle offenen AFK-Pending-Einträge dieses Users
-    to_remove: List[Tuple[int, int, int]] = []
+    to_remove = []
     for (guild_id, msg_id, uid), deadline in AFK_PENDING.items():
         if uid != user_id:
             continue
@@ -2348,7 +1957,7 @@ async def test_command(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
 
-    results: List[Tuple[str, bool]] = []
+    results: List[tuple[str, bool]] = []
 
     # ENV / GitHub Basics
     results.append(("DISCORD_TOKEN gesetzt", TOKEN is not None))
@@ -2489,7 +2098,7 @@ flask_app = Flask("bot_flask")
 
 @flask_app.route("/")
 def index():
-    return "✅ SlotBot v5.0 läuft (Render kompatibel)."
+    return "✅ SlotBot v4.6 läuft (Render kompatibel)."
 
 
 @flask_app.route("/ics/<int:message_id>.ics")
@@ -2525,7 +2134,7 @@ def run_bot():
 @bot.event
 async def on_ready():
     global TASKS_STARTED
-    print(f"✅ SlotBot v5.0 online als {bot.user}")
+    print(f"✅ SlotBot v4.6 online als {bot.user}")
     loaded = load_events_with_retry()
     active_events.clear()
     active_events.update(loaded)
@@ -2556,7 +2165,7 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    print("🚀 Starte SlotBot v5.0 + Flask ...")
+    print("🚀 Starte SlotBot v4.6 + Flask ...")
     active_events.update(load_events_with_retry())
     port = int(os.environ.get("PORT", 5000))
     # Bot in separatem Thread
