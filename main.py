@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 import os
 import re
 import io
@@ -56,6 +56,8 @@ EVENT_HISTORY: List[Dict[str, Any]] = []  # einfache Historie für /stats
 AFK_PENDING: Dict[Tuple[int, int, int], datetime] = {}  # (guild_id, msg_id, user_id) -> deadline
 
 # Punkte-System (DKP-ähnlich): guild_id -> {user_id: points}
+POINTS: Dict[int, Dict[int, int]] = {}
+
 # Background-Tasks (werden in on_ready gestartet und für Health-Checks genutzt)
 BACKGROUND_TASKS: Dict[str, asyncio.Task] = {}
 TASKS_STARTED = False
@@ -264,11 +266,12 @@ def put_empty_events(obj):
 
 
 def load_events_once() -> Dict[int, Dict[str, Any]]:
-    global SUBSCRIPTIONS, EVENT_HISTORY
+    global SUBSCRIPTIONS, EVENT_HISTORY, POINTS
     if not GITHUB_TOKEN:
         print("⚠️ GITHUB_TOKEN fehlt – starte ohne Persistenz.")
         SUBSCRIPTIONS = {}
         EVENT_HISTORY = []
+        POINTS = {}
         return {}
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     try:
@@ -303,6 +306,8 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
             else:
                 EVENT_HISTORY = []
 
+            # Punkte-System einlesen
+            points_raw = raw.get("_points")
             if isinstance(points_raw, dict):
                 pts: Dict[int, Dict[int, int]] = {}
                 for g_id_str, mapping in points_raw.items():
@@ -318,10 +323,13 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
                             except Exception:
                                 continue
                     pts[g_id] = inner
+                POINTS = pts
+            else:
+                POINTS = {}
 
             # Events laden (alles außer den Sonderkeys)
             for k, ev in raw.items():
-                if k in ("_subscriptions", "_history"):
+                if k in ("_subscriptions", "_history", "_points"):
                     continue
                 for key in ("creator_id", "channel_id", "guild_id", "thread_id"):
                     if key in ev:
@@ -356,6 +364,7 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
             put_empty_events({})
             SUBSCRIPTIONS = {}
             EVENT_HISTORY = []
+            POINTS = {}
             return {}
         else:
             print(f"⚠️ Fehler beim Laden: HTTP {r.status_code}")
@@ -363,6 +372,7 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
         print(f"❌ Fehler beim Laden von events.json: {e}")
     SUBSCRIPTIONS = {}
     EVENT_HISTORY = []
+    POINTS = {}
     return {}
 
 
@@ -418,6 +428,15 @@ def save_events():
             subs_out[str(g_id)] = inner
         serializable["_subscriptions"] = subs_out
 
+        # Punkte (DKP)
+        points_out: Dict[str, Dict[str, int]] = {}
+        for g_id, mapping in POINTS.items():
+            inner: Dict[str, int] = {}
+            for u_id, value in mapping.items():
+                inner[str(u_id)] = int(value)
+            points_out[str(g_id)] = inner
+        serializable["_points"] = points_out
+
         # History
         serializable["_history"] = EVENT_HISTORY
 
@@ -470,6 +489,13 @@ def get_latest_user_event(guild_id: int, user_id: int):
     msg_id, ev = max(own, key=lambda x: x[1].get("event_time", datetime.min.replace(tzinfo=pytz.utc)))
     return msg_id, ev
 
+
+def can_edit_points(interaction: discord.Interaction) -> bool:
+    """Nur Owner oder Server-Admins/Manage_Guild dürfen Punkte verändern."""
+    if interaction.user.id == OWNER_ID:
+        return True
+    perms = interaction.user.guild_permissions
+    return perms.administrator or perms.manage_guild
 
 
 # ----------------- Reminder & Cleanup & AFK -----------------
@@ -795,8 +821,8 @@ async def help_command(interaction: discord.Interaction):
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
             "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            "`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:27.10.2025 zeit:20:00`\n"
-            "`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n"
+            "`/event art:PvE zweck:'XP Farmen' ort:'Calpheon' datum:27.10.2025 zeit:20:00`\n"
+            "`level:61+ stil:'Organisiert' slots:'⚔️:3 🛡️:1 💉:2' auto_delete_stunden:3`\n"
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
         ),
@@ -840,6 +866,16 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="📊 /stats",
         value="Zeigt Event-Statistiken für diesen Server (Anzahl Events, Zeiten, Teilnahme-Trends).",
+        inline=False,
+    )
+    embed.add_field(
+        name="🏅 Punkte-System",
+        value=(
+            "`/points_add` – Punkte vergeben (öffentlich sichtbar)\n"
+            "`/points_remove` – Punkte abziehen (öffentlich sichtbar)\n"
+            "`/points` – Punkte eines Spielers anzeigen\n"
+            "`/points_top` – Leaderboard anzeigen"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -1448,7 +1484,6 @@ async def unsubscribe_command(interaction: discord.Interaction, art: app_command
 
 
 # ----------------- /stats -----------------
-
 @bot.tree.command(name="stats", description="Zeigt Event-Statistiken für diesen Server")
 async def stats_command(interaction: discord.Interaction):
     guild_id = interaction.guild.id
@@ -1521,10 +1556,220 @@ async def stats_command(interaction: discord.Interaction):
         inline=False,
     )
 
+    # Punkte-Statistik
+    guild_points = POINTS.get(guild_id, {})
+    total_points_entries = len(guild_points)
+    if total_points_entries > 0:
+        avg_points = sum(guild_points.values()) / total_points_entries
+        embed.add_field(
+            name="🏅 Punkte-System",
+            value=(
+                f"• Spieler mit Punkten: **{total_points_entries}**\n"
+                f"• Durchschnittliche Punkte: **{avg_points:.1f}**"
+            ),
+            inline=False,
+        )
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ----------------- Punkte-System Commands -----------------
+@app_commands.describe(
+    member="Spieler, der Punkte bekommen soll",
+    amount="Anzahl der Punkte",
+    reason="Optional: Grund für die Punktevergabe",
+)
+@bot.tree.command(name="points_add", description="Gibt einem Spieler Punkte (DKP-ähnlich)")
+async def points_add(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: app_commands.Range[int, 1, 100000],
+    reason: str = None,
+):
+    if not can_edit_points(interaction):
+        await interaction.response.send_message(
+            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
+            ephemeral=True,
+        )
+        return
+
+    guild_id = interaction.guild.id
+    user_id = member.id
+
+    if guild_id not in POINTS:
+        POINTS[guild_id] = {}
+
+    old_points = POINTS[guild_id].get(user_id, 0)
+    new_points = old_points + amount
+    POINTS[guild_id][user_id] = new_points
+
+    await safe_save()
+
+    # Öffentliche Nachricht im Channel
+    text_public = (
+        f"🏅 {interaction.user.mention} hat {member.mention} **{amount}** Punkte gegeben.\n"
+        f"Neuer Stand: **{new_points}** Punkte."
+    )
+    if reason:
+        text_public += f"\n📝 Grund: {reason}"
+
+    await interaction.response.send_message(text_public)
+
+
+@app_commands.describe(
+    member="Spieler, dem Punkte abgezogen werden sollen",
+    amount="Anzahl der Punkte, die abgezogen werden",
+    reason="Optional: Grund für den Abzug",
+)
+@bot.tree.command(name="points_remove", description="Zieht einem Spieler Punkte ab")
+async def points_remove(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: app_commands.Range[int, 1, 100000],
+    reason: str = None,
+):
+    if not can_edit_points(interaction):
+        await interaction.response.send_message(
+            "❌ Du darfst die Punkte-Liste nicht bearbeiten.",
+            ephemeral=True,
+        )
+        return
+
+    guild_id = interaction.guild.id
+    user_id = member.id
+
+    if guild_id not in POINTS:
+        POINTS[guild_id] = {}
+
+    old_points = POINTS[guild_id].get(user_id, 0)
+    new_points = max(0, old_points - amount)
+    POINTS[guild_id][user_id] = new_points
+
+    await safe_save()
+
+    # Öffentliche Nachricht im Channel
+    text_public = (
+        f"⚖️ {interaction.user.mention} hat {member.mention} **{amount}** Punkte abgezogen.\n"
+        f"Neuer Stand: **{new_points}** Punkte."
+    )
+    if reason:
+        text_public += f"\n📝 Grund: {reason}"
+
+    await interaction.response.send_message(text_public)
+
+
+@app_commands.describe(
+    member="Optional: Spieler, dessen Punkte angezeigt werden sollen (Standard: du selbst)",
+)
+@bot.tree.command(name="points", description="Zeigt die Punkte (DKP) eines Spielers")
+async def points_show(
+    interaction: discord.Interaction,
+    member: discord.Member = None,
+):
+    if member is None:
+        member = interaction.user
+
+    guild_id = interaction.guild.id
+    user_id = member.id
+
+    points = POINTS.get(guild_id, {}).get(user_id, 0)
+
+    await interaction.response.send_message(
+        f"📊 {member.mention} hat aktuell **{points}** Punkte.",
+        ephemeral=True,
+    )
+
+
+@app_commands.describe(
+    limit="Wie viele Spieler sollen angezeigt werden? (Standard: 10)",
+)
+@bot.tree.command(name="points_top", description="Zeigt das Punkte-Leaderboard dieses Servers")
+async def points_top(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 1, 50] = 10,
+):
+    guild_id = interaction.guild.id
+    guild_points = POINTS.get(guild_id, {})
+
+    if not guild_points:
+        await interaction.response.send_message(
+            "ℹ️ Es sind noch keine Punkte für diesen Server gespeichert.",
+            ephemeral=True,
+        )
+        return
+
+    # Sortiert nach Punkten, absteigend
+    sorted_entries = sorted(
+        guild_points.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[:limit]
+
+    lines = []
+    for idx, (user_id, pts) in enumerate(sorted_entries, start=1):
+        member = interaction.guild.get_member(user_id)
+        name = member.mention if member else f"<@{user_id}>"
+        lines.append(f"**#{idx}** – {name}: **{pts}** Punkte")
+
+    embed = discord.Embed(
+        title=f"🏆 Punkte-Leaderboard für {interaction.guild.name}",
+        description="\n".join(lines),
+        color=0xF39C12,
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ----------------- Reaction Handling -----------------
+async def _fetch_message_with_retry(channel: discord.abc.Messageable, message_id: int, tries: int = 3):
+    for _ in range(tries):
+        try:
+            return await channel.fetch_message(message_id)
+        except Exception:
+            await asyncio.sleep(1)
+    return None
+
+
+
+@app_commands.describe(
+    limit="Wie viele Spieler sollen angezeigt werden? (Standard: 10)",
+)
+@bot.tree.command(name="points_top_public", description="Zeigt das Punkte-Leaderboard öffentlich im Channel")
+async def points_top_public(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 1, 50] = 10,
+):
+    guild_id = interaction.guild.id
+    guild_points = POINTS.get(guild_id, {})
+
+    if not guild_points:
+        await interaction.response.send_message(
+            "ℹ️ Es sind noch keine Punkte für diesen Server gespeichert.",
+            ephemeral=False,
+        )
+        return
+
+    sorted_entries = sorted(
+        guild_points.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[:limit]
+
+    lines = []
+    for idx, (user_id, pts) in enumerate(sorted_entries, start=1):
+        member = interaction.guild.get_member(user_id)
+        name = member.mention if member else f"<@{user_id}>"
+        lines.append(f"**#{idx}** – {name}: **{pts}** Punkte")
+
+    embed = discord.Embed(
+        title="🏆 Öffentliches Punkte-Leaderboard",
+        description="\n".join(lines),
+        color=0xFFD700,
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
