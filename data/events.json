@@ -26,27 +26,6 @@
         "delete_at": "2025-11-22T19:10:00+00:00",
         "art": "PvE"
     },
-    "1441866302334697603": {
-        "title": "test222",
-        "slots": {
-            "\ud83d\udc4d": {
-                "limit": 2,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1441850033745039411,
-        "guild_id": 1420155879759675496,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** test222\n\ud83d\udccd **Ort:** 34\n\ud83d\udd52 **Datum/Zeit:** Samstag, 22.11.2025 20:22 CET\n\u2694\ufe0f **Levelbereich:** 1\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-11-22T19:22:00+00:00",
-        "thread_id": null,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-11-22T20:22:00+00:00",
-        "art": "PvE"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
