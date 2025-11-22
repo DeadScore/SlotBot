@@ -520,7 +520,7 @@ async def reminder_task():
                     seconds_left = (event_time - now).total_seconds()
 
                     # 20-Min-Reminder
-                    if 0 <= seconds_left <= 20 * 60 and user_id not in slot["reminded"]:
+                    if 0 <= seconds_left <= 30 * 60 and user_id not in slot["reminded"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
                             await member.send(
@@ -532,7 +532,7 @@ async def reminder_task():
                             pass
 
                     # 10-Min-AFK-Check
-                    if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
+                    if 0 <= seconds_left <= 15 * 60 and user_id not in slot["afk_dm_sent"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
                             await member.send(
