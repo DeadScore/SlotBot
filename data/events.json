@@ -1,25 +1,4 @@
 {
-    "1442193016365256908": {
-        "title": "Test",
-        "slots": {
-            "\ud83c\udd99": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1420155880586088553,
-        "guild_id": 1420155879759675496,
-        "header": "\ud83c\udf3e **Farm \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Test\n\ud83d\udccd **Ort:** Test\n\ud83d\udd52 **Datum/Zeit:** Sonntag, 23.11.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** T2\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-11-23T19:00:00+00:00",
-        "thread_id": 1442193016365256908,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-11-23T20:00:00+00:00",
-        "art": "Farm"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
