@@ -1,27 +1,4 @@
 {
-    "1442189242724913196": {
-        "title": "TEst",
-        "slots": {
-            "\ud83c\udd99": {
-                "limit": 3,
-                "main": [
-                    404173735130562562
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1420155880586088553,
-        "guild_id": 1420155879759675496,
-        "header": "\ud83c\udf3e **Farm \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** TEst\n\ud83d\udccd **Ort:** iushbdf\n\ud83d\udd52 **Datum/Zeit:** Sonntag, 23.11.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** T3\n\ud83d\udcac **Stil:** Unbekannt\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-11-23T19:00:00+00:00",
-        "thread_id": 1442189242724913196,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-11-23T20:00:00+00:00",
-        "art": "Farm"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
