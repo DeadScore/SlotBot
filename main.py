@@ -77,12 +77,14 @@ ART_EMOJI = {
     "PvE": "🟢",
     "PvP": "🔴",
     "PVX": "🟣",
+    "Farm": "🌾",
 }
 
 ART_COLOR = {
     "PvE": discord.Color.green(),
     "PvP": discord.Color.red(),
     "PVX": discord.Color.purple(),
+    "Farm": discord.Color.dark_green(),
 }
 
 
@@ -499,7 +501,7 @@ def can_edit_points(interaction: discord.Interaction) -> bool:
 
 # ----------------- Reminder & Cleanup & AFK -----------------
 async def reminder_task():
-    """Reminder 20 Min vorher + AFK-Check 10 Min vorher (DM)."""
+    """Reminder 30 Min vorher + AFK-Check 15 Min vorher (DM)."""
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now(pytz.utc)
@@ -510,40 +512,45 @@ async def reminder_task():
             event_time = ev.get("event_time")
             if not event_time:
                 continue
+
             for emoji, slot in ev["slots"].items():
                 if "reminded" not in slot:
                     slot["reminded"] = set()
                 if "afk_dm_sent" not in slot:
                     slot["afk_dm_sent"] = set()
+
                 for user_id in list(slot["main"]):
                     seconds_left = (event_time - now).total_seconds()
 
-                    # 20-Min-Reminder
+                    # 30-Min-Reminder
                     if 0 <= seconds_left <= 30 * 60 and user_id not in slot["reminded"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"⏰ Dein Event **{ev['title']}** startet in **20 Minuten**! "
-                                f"Bitte sei rechtzeitig online."
-                            )
+                            if member:
+                                await member.send(
+                                    f"⏰ Dein Event **{ev['title']}** startet in **30 Minuten**! "
+                                    f"Bitte sei rechtzeitig online."
+                                )
                             slot["reminded"].add(user_id)
                         except Exception:
                             pass
 
-                    # 10-Min-AFK-Check
+                    # 15-Min-AFK-Check mit 5 Min Reaktionszeit
                     if 0 <= seconds_left <= 15 * 60 and user_id not in slot["afk_dm_sent"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
-                                f"Das Event startet in **10 Minuten**.\n"
-                                f"Bitte antworte in den nächsten **5 Minuten** hier im Chat, "
-                                f"sonst wirst du automatisch aus deinem Slot entfernt."
-                            )
+                            if member:
+                                await member.send(
+                                    f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
+                                    f"Das Event startet in **15 Minuten**.\n"
+                                    f"Bitte antworte in den nächsten **5 Minuten** hier im Chat, "
+                                    f"sonst wirst du automatisch aus deinem Slot entfernt."
+                                )
                             slot["afk_dm_sent"].add(user_id)
                             AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=5)
                         except Exception:
                             pass
+
         await asyncio.sleep(30)
 
 
@@ -887,56 +894,85 @@ async def help_command(interaction: discord.Interaction):
 
 # ----------------- /event -----------------
 @app_commands.describe(
-    art="Art des Events (PvE/PvP/PVX)",
+    art="Art des Events (PvE/PvP/PVX/Farm)",
     zweck="Zweck (z. B. EP Farmen)",
     ort="Ort (z. B. Carphin)",
     zeit="Zeit (z. B. 20:00, 20, 20 Uhr)",
-    datum="Datum im Format DD.MM.YYYY",
+    datum="Datum (z. B. 27.10.2025, 27-10-2025, heute, morgen)",
     level="Levelbereich",
-    stil="Gemütlich oder Organisiert",
+    stil="Gemütlich oder Organisiert (optional)",
     slots="Slots (z. B. ⚔️:2 🛡️:1)",
-    typ="Optional: Gruppe oder Raid",
     gruppenlead="Optional: Gruppenleiter",
     anmerkung="Optional: Freitext",
     auto_delete_stunden="Nach wie vielen Stunden nach Eventstart das Event automatisch gelöscht werden soll (Standard: 1)",
 )
 @app_commands.choices(
-    art=[app_commands.Choice(name=x, value=x) for x in ["PvE", "PvP", "PVX"]],
+    art=[app_commands.Choice(name=x, value=x) for x in ["PvE", "PvP", "PVX", "Farm"]],
     stil=[app_commands.Choice(name=x, value=x) for x in ["Gemütlich", "Organisiert"]],
-    typ=[app_commands.Choice(name=x, value=x) for x in ["Gruppe", "Raid"]],
 )
 @bot.tree.command(name="event", description="Erstellt ein Event mit Slots & Thread")
 async def event(
     interaction: discord.Interaction,
-    art: app_commands.Choice[str],
     zweck: str,
+    art: app_commands.Choice[str],
     ort: str,
     zeit: str,
     datum: str,
     level: str,
-    stil: app_commands.Choice[str],
-    slots: str,
-    typ: app_commands.Choice[str] = None,
+    stil: app_commands.Choice[str] = None,
+    slots: str = None,
     gruppenlead: str = None,
     anmerkung: str = None,
     auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
-    # Datum/Zeit prüfen
+    # Datum flexibel parsen
+    # Akzeptiert: DD.MM.YYYY, DD-MM-YYYY, YYYY-MM-DD, DD.MM, DD-MM, "heute", "morgen"
     try:
-        local_date = datetime.strptime(datum, "%d.%m.%Y")
-        local_date = BERLIN_TZ.localize(local_date)
-    except Exception:
-        await interaction.response.send_message("❌ Ungültiges Datum! Nutze DD.MM.YYYY", ephemeral=True)
-        return
-
-    time_str = parse_time_tolerant(zeit, "20:00")
-    try:
-        local_dt = BERLIN_TZ.localize(
-            datetime.strptime(f"{datum} {time_str}", "%d.%m.%Y %H:%M")
-        )
+        datum_raw = datum.strip().lower()
+        if datum_raw in ("heute", "today"):
+            local_date = datetime.now(BERLIN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif datum_raw in ("morgen", "tomorrow"):
+            local_date = (datetime.now(BERLIN_TZ) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            parsed = None
+            for fmt in ("%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m", "%d-%m"):
+                try:
+                    parsed = datetime.strptime(datum_raw, fmt)
+                    break
+                except Exception:
+                    parsed = None
+            if parsed is None:
+                await interaction.response.send_message(
+                    "❌ Ungültiges Datum! Nutze z. B. 27.10.2025, 27-10-2025, YYYY-MM-DD oder 'heute'/'morgen'.",
+                    ephemeral=True,
+                )
+                return
+            # Wenn kein Jahr angegeben war, nimmt datetime standardmäßig 1900
+            # → aktuelles Jahr setzen, ggf. auf nächstes Jahr rollen, falls das Datum schon vorbei ist
+            if parsed.year == 1900:
+                now_local = datetime.now(BERLIN_TZ)
+                parsed = parsed.replace(year=now_local.year)
+                if parsed < now_local:
+                    parsed = parsed.replace(year=now_local.year + 1)
+            local_date = BERLIN_TZ.localize(parsed)
     except Exception:
         await interaction.response.send_message(
-            "❌ Ungültige Zeit! Nutze z. B. 20:00, 20, 20.15, 20 Uhr",
+            "❌ Ungültiges Datum! Nutze z. B. 27.10.2025 oder 'heute'/'morgen'.",
+            ephemeral=True,
+        )
+        return
+
+    # Zeit tolerant parsen
+    time_str = parse_time_tolerant(zeit, "20:00")
+    try:
+        hhmm = time_str
+        h, m = [int(x) for x in hhmm.split(":")]
+        local_dt = local_date.replace(hour=h, minute=m)
+        if local_dt.tzinfo is None:
+            local_dt = BERLIN_TZ.localize(local_dt)
+    except Exception:
+        await interaction.response.send_message(
+            "❌ Ungültige Zeit! Nutze z. B. 20:00, 20, 20.15, 20 Uhr.",
             ephemeral=True,
         )
         return
@@ -959,6 +995,7 @@ async def event(
     time_str_long = format_de_datetime(local_dt)
     art_emoji = ART_EMOJI.get(art.value, "🗡️")
     sep = "─────────────────────────────────"
+    stil_text = stil.value if stil else "Unbekannt"
 
     header_lines = [
         f"{art_emoji} **{art.value} – Neue Gruppensuche!**",
@@ -967,10 +1004,8 @@ async def event(
         f"📍 **Ort:** {ort}",
         f"🕒 **Datum/Zeit:** {time_str_long}",
         f"⚔️ **Levelbereich:** {level}",
-        f"💬 **Stil:** {stil.value}",
+        f"💬 **Stil:** {stil_text}",
     ]
-    if typ:
-        header_lines.append(f"🏷️ **Typ:** {typ.value}")
     if gruppenlead:
         header_lines.append(f"👑 **Gruppenlead:** {gruppenlead}")
     if anmerkung:
@@ -988,7 +1023,9 @@ async def event(
     confirm.add_field(name="📍 Ort", value=ort, inline=True)
     confirm.add_field(name="🕒 Start", value=time_str_long, inline=True)
     confirm.add_field(name="⚔️ Level", value=level, inline=True)
+    confirm.add_field(name="💬 Stil", value=stil_text, inline=True)
     confirm.add_field(name="⏱️ Auto-Löschung", value=f"{auto_delete_stunden}h nach Start", inline=True)
+
     await interaction.response.send_message(embed=confirm, ephemeral=True)
 
     # Nachricht im Channel
@@ -1003,7 +1040,7 @@ async def event(
         await interaction.followup.send(f"❌ Fehler beim Erstellen des Events: {e}", ephemeral=True)
         return
 
-    # Reaktionen
+    # Reaktionen setzen
     failed_emojis = []
     for e in slot_dict.keys():
         try:
@@ -1015,7 +1052,7 @@ async def event(
     thread_id = None
     try:
         thread = await msg.create_thread(
-            name=f"Event-Log: {zweck} {datum} {time_str}",
+            name=f"Event-Log: {zweck} {local_dt.strftime('%d.%m.%Y %H:%M')}",
             auto_archive_duration=1440,
         )
         await thread.send(f"🧵 Event-Log für: {zweck} — {msg.jump_url}")
@@ -1082,7 +1119,6 @@ async def event(
                     )
             except Exception:
                 pass
-
 
 # ----------------- /event_edit -----------------
 @app_commands.describe(
