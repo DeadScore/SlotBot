@@ -932,7 +932,9 @@ async def event(
         if datum_raw in ("heute", "today"):
             local_date = datetime.now(BERLIN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
         elif datum_raw in ("morgen", "tomorrow"):
-            local_date = (datetime.now(BERLIN_TZ) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            local_date = (datetime.now(BERLIN_TZ) + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
         else:
             parsed = None
             for fmt in ("%d.%m.%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m", "%d-%m"):
@@ -982,7 +984,11 @@ async def event(
         await interaction.response.send_message("❌ Datum/Zeit liegt in der Vergangenheit!", ephemeral=True)
         return
 
-    # Slots parsen
+    # Slots parsen (Pflichtfeld – muss angegeben werden)
+    if not slots:
+        await interaction.response.send_message("❌ Du musst mindestens einen Slot angeben (z. B. ⚔️:2 🛡️:1).", ephemeral=True)
+        return
+
     slot_dict = parse_slots(slots, interaction.guild)
     if slot_dict is None:
         await interaction.response.send_message("❌ Keine gültigen Slots gefunden.", ephemeral=True)
@@ -995,7 +1001,6 @@ async def event(
     time_str_long = format_de_datetime(local_dt)
     art_emoji = ART_EMOJI.get(art.value, "🗡️")
     sep = "─────────────────────────────────"
-    stil_text = stil.value if stil else "Unbekannt"
 
     header_lines = [
         f"{art_emoji} **{art.value} – Neue Gruppensuche!**",
@@ -1004,12 +1009,16 @@ async def event(
         f"📍 **Ort:** {ort}",
         f"🕒 **Datum/Zeit:** {time_str_long}",
         f"⚔️ **Levelbereich:** {level}",
-        f"💬 **Stil:** {stil_text}",
     ]
+
+    # optionale Angaben nur, wenn gesetzt
+    if stil:
+        header_lines.append(f"💬 **Stil:** {stil.value}")
     if gruppenlead:
         header_lines.append(f"👑 **Gruppenlead:** {gruppenlead}")
     if anmerkung:
         header_lines.append(f"📝 **Anmerkung:** {anmerkung}")
+
     header_lines.append(sep)
     header = "\n".join(header_lines)
 
@@ -1023,12 +1032,13 @@ async def event(
     confirm.add_field(name="📍 Ort", value=ort, inline=True)
     confirm.add_field(name="🕒 Start", value=time_str_long, inline=True)
     confirm.add_field(name="⚔️ Level", value=level, inline=True)
-    confirm.add_field(name="💬 Stil", value=stil_text, inline=True)
+    if stil:
+        confirm.add_field(name="💬 Stil", value=stil.value, inline=True)
     confirm.add_field(name="⏱️ Auto-Löschung", value=f"{auto_delete_stunden}h nach Start", inline=True)
 
     await interaction.response.send_message(embed=confirm, ephemeral=True)
 
-    # Nachricht im Channel
+    # Nachricht im Channel – Slots sind von Anfang an sichtbar
     try:
         msg = await interaction.channel.send(
             header + "\n\n" + format_event_text({"slots": slot_dict}, interaction.guild)
