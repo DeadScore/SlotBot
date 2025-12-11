@@ -4,12 +4,14 @@
         "slots": {
             "\ud83d\udc65": {
                 "limit": 100,
-                "main": [
+                "main": [],
+                "waitlist": [],
+                "reminded": [
                     404173735130562562
                 ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
+                "afk_dm_sent": [
+                    404173735130562562
+                ]
             }
         },
         "channel_id": 1307427735928311929,
