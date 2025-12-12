@@ -20,6 +20,27 @@
         "delete_at": "2025-12-12T19:00:00+00:00",
         "art": "PVX"
     },
+    "1449046889189343342": {
+        "title": "Leveln",
+        "slots": {
+            "\u2705": {
+                "limit": 8,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Leveln\n\ud83d\udccd **Ort:** wo platz ist\n\ud83d\udd52 **Datum/Zeit:** Freitag, 12.12.2025 19:00 CET\n\u2694\ufe0f **Levelbereich:** 5+\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 404173735130562562,
+        "event_time": "2025-12-12T18:00:00+00:00",
+        "thread_id": 1449046889189343342,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-12T19:00:00+00:00",
+        "art": "PVX"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -184,6 +205,14 @@
             "title": "Leveln",
             "art": "PVX",
             "created_at": "2025-12-12T14:34:10.484285",
+            "event_time": "2025-12-12T18:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 404173735130562562,
+            "title": "Leveln",
+            "art": "PVX",
+            "created_at": "2025-12-12T14:35:02.093339",
             "event_time": "2025-12-12T18:00:00+00:00"
         }
     ]
