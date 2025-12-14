@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 
 import os
 import re
@@ -819,26 +820,26 @@ async def help_command(interaction: discord.Interaction):
         ),
         color=0x5865F2,
     )
-embed.add_field(
-    name="🆕 /event",
-    value="""
-**Erstellt ein neues Event mit Slots & Thread.**
-
-Pflicht:
-`zweck`, `art`, `ort`, `datum`, `zeit`, `level`, `slots`
-
-Optional:
-`stil`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)
-
-Beispiel:
-/event zweck:XP_Farmen art:PvE ort:Calpheon datum:27.10.2025 zeit:20:00
-level:61+ stil:Organisiert slots:⚔️:3 🛡️:1 💉:2 auto_delete_stunden:3
-
-• 30-Minuten-Reminder per DM
-• 15-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)
-""",
-    inline=False,
-)
+    embed.add_field(
+        name="🆕 /event",
+        value="""
+    **Erstellt ein neues Event mit Slots & Thread.**
+    
+    Pflicht:
+    `zweck`, `art`, `ort`, `datum`, `zeit`, `level`, `slots`
+    
+    Optional:
+    `stil`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)
+    
+    Beispiel:
+    /event zweck:XP_Farmen art:PvE ort:Calpheon datum:27.10.2025 zeit:20:00
+    level:61+ stil:Organisiert slots:⚔️:3 🛡️:1 💉:2 auto_delete_stunden:3
+    
+    • 30-Minuten-Reminder per DM
+    • 15-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)
+    """,
+        inline=False,
+    )
     embed.add_field(
         name="🎲 /roll & /start_roll",
         value=(
