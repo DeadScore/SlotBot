@@ -826,8 +826,8 @@ async def help_command(interaction: discord.Interaction):
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
             "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            "`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:27.10.2025 zeit:20:00`\n"
-            "`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n"
+            '`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:27.10.2025 zeit:20:00`\n'
+            '`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n'
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
         ),
@@ -2259,19 +2259,8 @@ def ics_file(message_id: int):
 
 
 def run_bot():
-    """Startet den Bot und startet ihn bei Crash automatisch neu."""
-    while True:
-        try:
-            asyncio.run(bot.start(TOKEN))
-        except Exception as e:
-            print("❌ Bot ist abgestürzt:", e)
-            print("🔁 Starte Bot in 10 Sekunden neu ...")
-            import time
-            time.sleep(10)
-        else:
-            print("✅ Bot wurde sauber beendet.")
-            break
-
+    """Startet den Bot genau einmal (keine Restart-Schleife, um doppelte Instanzen zu vermeiden)."""
+    asyncio.run(bot.start(TOKEN))
 
 
 @bot.event
@@ -2282,6 +2271,15 @@ async def on_ready():
     active_events.clear()
     active_events.update(loaded)
     print(f"📂 Aktive Events im Speicher: {len(active_events)}")
+
+    # Extra-Schutz: Falls der Prozess aus irgendeinem Grund on_ready doppelt bekommt,
+    # starten wir die Background-Tasks nicht nochmal.
+    # (TASKS_STARTED hilft im selben Prozess; zusätzlich prüfen wir laufende Tasks.)
+    for t in BACKGROUND_TASKS.values():
+        if t and not t.done() and not t.cancelled():
+            # Es läuft bereits mindestens ein Background-Task -> nichts doppelt starten
+            return
+
 
     # Background-Tasks nur einmal pro Prozess starten, um doppelte DMs zu vermeiden
     if not TASKS_STARTED:
