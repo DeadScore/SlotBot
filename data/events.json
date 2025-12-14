@@ -1,4 +1,46 @@
 {
+    "1449763367727136849": {
+        "title": "Leveln",
+        "slots": {
+            "<:Tank_Archetype:1345126746340458527>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Cleric_Archetype:1345126828280512683>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Bard_Archetype:1345126811880914944>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:DPS_Archetype:1422234733177208863>": {
+                "limit": 5,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Leveln\n\ud83d\udccd **Ort:** Oakenbane Keep\n\ud83d\udd52 **Datum/Zeit:** Sonntag, 14.12.2025 19:00 CET\n\u2694\ufe0f **Levelbereich:** 10+\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 404173735130562562,
+        "event_time": "2025-12-14T18:00:00+00:00",
+        "thread_id": 1449763367727136849,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-14T19:00:00+00:00",
+        "art": "PVX"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -180,6 +222,14 @@
             "art": "PVX",
             "created_at": "2025-12-12T14:35:52.522469",
             "event_time": "2025-12-12T18:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 404173735130562562,
+            "title": "Leveln",
+            "art": "PVX",
+            "created_at": "2025-12-14T14:02:05.543696",
+            "event_time": "2025-12-14T18:00:00+00:00"
         }
     ]
 }
