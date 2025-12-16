@@ -4,7 +4,9 @@
         "slots": {
             "\ud83d\udc4d": {
                 "limit": 65,
-                "main": [],
+                "main": [
+                    222744756134871041
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
