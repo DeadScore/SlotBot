@@ -60,6 +60,48 @@ AFK_PENDING: Dict[Tuple[int, int, int], datetime] = {}  # (guild_id, msg_id, use
 # Roll-Runden: (guild_id, channel_id) -> Session-Daten
 ROLL_SESSIONS: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
+
+async def _post_roll_result(channel: discord.abc.Messageable, guild: discord.Guild, end_at: datetime, rolls: Dict[int, int]):
+    """Postet das Ergebnis einer Roll-Runde (Gewinner + Leaderboard) in den Channel."""
+    if not rolls:
+        await channel.send("⏱️ Die Roll-Runde ist vorbei – niemand hat gewürfelt.")
+        return
+
+    max_val = max(rolls.values())
+    winners = [uid for uid, val in rolls.items() if val == max_val]
+
+    top_sorted = sorted(rolls.items(), key=lambda kv: kv[1], reverse=True)
+    leaderboard_lines = []
+    for idx, (uid, val) in enumerate(top_sorted[:15], start=1):
+        member = guild.get_member(uid)
+        name = member.mention if member else f"<@{uid}>"
+        leaderboard_lines.append(f"**#{idx}** {name}: **{val}**")
+
+    win_mentions = []
+    for uid in winners:
+        member = guild.get_member(uid)
+        win_mentions.append(member.mention if member else f"<@{uid}>")
+
+    end_local = end_at.astimezone(BERLIN_TZ).strftime("%H:%M")
+
+    result = discord.Embed(
+        title="🏁 Roll-Runde beendet",
+        description=(
+            f"Ende: **{end_local} Uhr** (Berlin)\n"
+            f"Teilnehmer: **{len(rolls)}**\n\n"
+            f"🏆 **Gewinner:** {', '.join(win_mentions)}\n"
+            f"🎯 **Höchster (Erst-)Wurf:** **{max_val}**"
+        ),
+        color=discord.Color.green(),
+    )
+    result.add_field(
+        name="📋 Leaderboard (Top 15)",
+        value="\n".join(leaderboard_lines),
+        inline=False,
+    )
+    await channel.send(embed=result)
+
+
 # Punkte-System (DKP-ähnlich): guild_id -> {user_id: points}
 POINTS: Dict[int, Dict[int, int]] = {}
 
@@ -956,12 +998,14 @@ async def roll_command(interaction: discord.Interaction):
 
 # ----------------- /start_roll -----------------
 @app_commands.describe(
-    dauer="Dauer der Roll-Runde in Sekunden (z. B. 60)",
+    dauer="Dauer der Roll-Runde in Sekunden (z. B. 60) – optional, wenn du stattdessen eine Uhrzeit nutzt",
+    uhrzeit="End-Uhrzeit (HH:MM oder z. B. 21, 21:30, 21.30, 21 Uhr) – optional, wenn du stattdessen Dauer nutzt",
 )
 @bot.tree.command(name="start_roll", description="Startet eine Roll-Runde (1–100) im aktuellen Channel")
 async def start_roll_command(
     interaction: discord.Interaction,
-    dauer: app_commands.Range[int, 5, 600] = 60,
+    dauer: app_commands.Range[int, 5, 21600] = None,  # bis 6h
+    uhrzeit: str = None,
 ):
     if interaction.guild is None:
         await interaction.response.send_message(
@@ -970,12 +1014,23 @@ async def start_roll_command(
         )
         return
 
+    # Genau eins von beiden muss gesetzt sein
+    if (dauer is None and not uhrzeit) or (dauer is not None and uhrzeit):
+        await interaction.response.send_message(
+            "❌ Bitte gib **entweder** `dauer` **oder** `uhrzeit` an (nicht beides).\n"
+            "Beispiele:\n"
+            "• `/start_roll dauer:60`\n"
+            "• `/start_roll uhrzeit:21:30`",
+            ephemeral=True,
+        )
+        return
+
     key = (interaction.guild.id, interaction.channel.id)
-    now = datetime.now(pytz.utc)
+    now_utc = datetime.now(pytz.utc)
     existing = ROLL_SESSIONS.get(key)
 
-    if existing and existing["end_time"] > now:
-        rest = int((existing["end_time"] - now).total_seconds())
+    if existing and existing["end_time"] > now_utc:
+        rest = int((existing["end_time"] - now_utc).total_seconds())
         await interaction.response.send_message(
             f"⚠️ In diesem Channel läuft bereits eine Roll-Runde (noch ca. {rest} Sekunden).\n"
             f"Benutze `/roll`, um mitzumachen.",
@@ -983,21 +1038,54 @@ async def start_roll_command(
         )
         return
 
-    end_time = now + timedelta(seconds=dauer)
+    # Endzeit berechnen
+    if uhrzeit:
+        hhmm = parse_time_tolerant(uhrzeit, "20:00")
+        local_now = datetime.now(pytz.utc).astimezone(BERLIN_TZ)
+
+        target_local = BERLIN_TZ.localize(
+            datetime.strptime(f"{local_now.strftime('%d.%m.%Y')} {hhmm}", "%d.%m.%Y %H:%M")
+        )
+        # Wenn schon vorbei: auf morgen schieben
+        if target_local <= local_now:
+            target_local = target_local + timedelta(days=1)
+
+        end_time = target_local.astimezone(pytz.utc)
+        dauer_calc = int((end_time - now_utc).total_seconds())
+
+        if dauer_calc < 5:
+            dauer_calc = 5
+
+        # Hard cap gegen "versehentlich morgen Abend"
+        if dauer_calc > 21600:
+            await interaction.response.send_message(
+                "❌ Die angegebene `uhrzeit` liegt zu weit in der Zukunft (max. 6 Stunden).",
+                ephemeral=True,
+            )
+            return
+
+        dauer = dauer_calc
+    else:
+        end_time = now_utc + timedelta(seconds=int(dauer))
+
     ROLL_SESSIONS[key] = {
         "end_time": end_time,
         "rolls": {},  # user_id -> erster (gezählter) Wurf
         "starter_id": interaction.user.id,
-        "duration": dauer,
+        "duration": int(dauer),
+        "task": None,
     }
+
+    end_local = end_time.astimezone(BERLIN_TZ)
+    end_text = end_local.strftime("%H:%M")
 
     embed = discord.Embed(
         title="🎲 Roll-Runde gestartet",
         description=(
             f"{interaction.user.mention} hat eine Roll-Runde gestartet!\n\n"
             f"• Zahlbereich: **1–100**\n"
-            f"• Dauer: **{dauer} Sekunden**\n"
-            f"• Channel: {interaction.channel.mention}\n\n"
+            f"• Läuft bis: **{end_text} Uhr** (Berlin)\n"
+f"• Channel: {interaction.channel.mention}\n\n"
             f"Benutze `/roll`, um teilzunehmen.\n"
             f"Pro Spieler zählt nur der **erste** Wurf."
         ),
@@ -1007,8 +1095,9 @@ async def start_roll_command(
 
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def finish_roll_session(guild_id: int, channel_id: int, end_at: datetime):
-        await asyncio.sleep(dauer)
+    async def finish_roll_session(guild_id: int, channel_id: int, end_at: datetime, duration_seconds: int):
+        await asyncio.sleep(duration_seconds)
+
         guild = bot.get_guild(guild_id)
         if guild is None:
             return
@@ -1033,28 +1122,75 @@ async def start_roll_command(
         max_val = max(rolls.values())
         winners = [uid for uid, val in rolls.items() if val == max_val]
 
-        if len(winners) == 1:
-            winner_id = winners[0]
-            member = guild.get_member(winner_id)
-            mention_text = member.mention if member else f"<@{winner_id}>"
-            await channel.send(
-                f"🏆 Die Roll-Runde ist vorbei!\n"
-                f"**Höchster Wurf (Erstwurf):** {max_val}\n"
-                f"**Gewinner:** {mention_text}"
-            )
-        else:
-            mentions = []
-            for uid in winners:
-                member = guild.get_member(uid)
-                mentions.append(member.mention if member else f"<@{uid}>")
-            mentions_text = ", ".join(mentions)
-            await channel.send(
-                f"🏆 Die Roll-Runde ist vorbei!\n"
-                f"**Höchster Wurf (Erstwurf):** {max_val}\n"
-                f"Mehrere Gewinner: {mentions_text}"
-            )
+        top_sorted = sorted(rolls.items(), key=lambda kv: kv[1], reverse=True)
+        leaderboard_lines = []
+        for idx, (uid, val) in enumerate(top_sorted[:15], start=1):
+            member = guild.get_member(uid)
+            name = member.mention if member else f"<@{uid}>"
+            leaderboard_lines.append(f"**#{idx}** {name}: **{val}**")
 
-    asyncio.create_task(finish_roll_session(interaction.guild.id, interaction.channel.id, end_time))
+        win_mentions = []
+        for uid in winners:
+            member = guild.get_member(uid)
+            win_mentions.append(member.mention if member else f"<@{uid}>")
+
+        end_local2 = end_at.astimezone(BERLIN_TZ).strftime("%H:%M")
+
+        result = discord.Embed(
+            title="🏁 Roll-Runde beendet",
+            description=(
+                f"Ende: **{end_local2} Uhr** (Berlin)\n"
+                f"Teilnehmer: **{len(rolls)}**\n\n"
+                f"🏆 **Gewinner:** {', '.join(win_mentions)}\n"
+                f"🎯 **Höchster (Erst-)Wurf:** **{max_val}**"
+            ),
+            color=discord.Color.green(),
+        )
+        result.add_field(
+            name="📋 Leaderboard (Top 15)",
+            value="\n".join(leaderboard_lines),
+            inline=False,
+        )
+        await channel.send(embed=result)
+    task = asyncio.create_task(
+        finish_roll_session(interaction.guild.id, interaction.channel.id, end_time, int(dauer))
+    )
+    ROLL_SESSIONS[key]["task"] = task
+
+
+
+# ----------------- /stop_roll -----------------
+@bot.tree.command(name="stop_roll", description="Beendet die aktuelle Roll-Runde in diesem Channel (Starter oder Admin)")
+async def stop_roll_command(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("❌ Dieser Befehl kann nur auf einem Server benutzt werden.", ephemeral=True)
+        return
+
+    key = (interaction.guild.id, interaction.channel.id)
+    session = ROLL_SESSIONS.get(key)
+    if not session:
+        await interaction.response.send_message("ℹ️ In diesem Channel läuft aktuell keine Roll-Runde.", ephemeral=True)
+        return
+
+    perms = interaction.user.guild_permissions
+    is_admin = perms.administrator or perms.manage_guild
+    if interaction.user.id != session.get("starter_id") and not is_admin:
+        await interaction.response.send_message(
+            "❌ Du darfst diese Roll-Runde nicht beenden (nur der Starter oder Admins).",
+            ephemeral=True,
+        )
+        return
+
+    task = session.get("task")
+    if task and not task.done() and not task.cancelled():
+        task.cancel()
+
+    rolls = session.get("rolls", {})
+    end_at = datetime.now(pytz.utc)
+    ROLL_SESSIONS.pop(key, None)
+
+    await interaction.response.send_message("🛑 Roll-Runde beendet. Ergebnis wird gepostet.", ephemeral=True)
+    await _post_roll_result(interaction.channel, interaction.guild, end_at, rolls)
 
 
 # ----------------- /event -----------------
