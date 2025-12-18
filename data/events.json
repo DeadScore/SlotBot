@@ -41,6 +41,27 @@
         "delete_at": "2025-12-20T20:00:00+00:00",
         "art": "PVX"
     },
+    "1451284299155378218": {
+        "title": "XP/Items",
+        "slots": {
+            "\u2705": {
+                "limit": 8,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** XP/Items\n\ud83d\udccd **Ort:** W\u00fcste Snakebite Stash\n\ud83d\udd52 **Datum/Zeit:** Freitag, 19.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** +15\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83d\udcdd **Anmerkung:** wenn mehr als 8 interesse haben gibts evtl. einen Raid damit niemand ausgeschlossen wird.\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 1294305436580843604,
+        "event_time": "2025-12-19T19:00:00+00:00",
+        "thread_id": 1451284299155378218,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-19T20:00:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -255,6 +276,14 @@
             "art": "PvE",
             "created_at": "2025-12-18T15:41:04.758512",
             "event_time": "2025-12-18T17:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 1294305436580843604,
+            "title": "XP/Items",
+            "art": "PvE",
+            "created_at": "2025-12-18T18:45:44.144550",
+            "event_time": "2025-12-19T19:00:00+00:00"
         }
     ]
 }
