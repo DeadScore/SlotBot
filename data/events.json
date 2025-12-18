@@ -88,7 +88,9 @@
             },
             "<:Cleric_Archetype:1345126828280512683>": {
                 "limit": 1,
-                "main": [],
+                "main": [
+                    893474722921189386
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
