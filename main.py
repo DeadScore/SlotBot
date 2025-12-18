@@ -278,18 +278,48 @@ async def update_event_message(message_id: int):
     ev = active_events.get(message_id)
     if not ev:
         return
+
     guild = bot.get_guild(ev["guild_id"])
     if not guild:
         return
+
     channel = guild.get_channel(ev["channel_id"])
-    if not channel:
-        return
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(ev["channel_id"])
+        except Exception:
+            return
+
+    content = ev["header"] + "\n\n" + format_event_text(ev, guild)
+
     for _ in range(3):
         try:
             msg = await channel.fetch_message(int(message_id))
-            await msg.edit(content=ev["header"] + "\n\n" + format_event_text(ev, guild))
+
+            # Discord-Limit: 2000 Zeichen
+            if len(content) <= 2000:
+                await msg.edit(content=content, embed=None)
+                return
+
+            # Fallback: Embed
+            embed = discord.Embed(
+                title=f"📅 Event: {ev.get('title','(ohne Titel)')}",
+                description=ev["header"],
+                color=0x2ECC71,
+            )
+            slots_text = format_event_text(ev, guild)
+            if len(slots_text) > 1024:
+                slots_text = slots_text[:1020] + "…"
+            embed.add_field(name="🎟️ Slots", value=slots_text, inline=False)
+
+            await msg.edit(content=None, embed=embed)
             return
-        except Exception:
+
+        except discord.HTTPException as e:
+            print(f"⚠️ update_event_message HTTPException: {e}")
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"⚠️ update_event_message Fehler: {e}")
             await asyncio.sleep(1)
 
 
@@ -544,6 +574,14 @@ def can_edit_points(interaction: discord.Interaction) -> bool:
     perms = interaction.user.guild_permissions
     return perms.administrator or perms.manage_guild
 
+
+
+def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
+    """Ersteller darf immer; Admin/Manage_Guild dürfen alles."""
+    if interaction.user.id == int(ev.get("creator_id", 0)):
+        return True
+    perms = interaction.user.guild_permissions
+    return perms.administrator or perms.manage_guild
 
 # ----------------- Reminder & Cleanup & AFK -----------------
 async def reminder_task():
@@ -1400,10 +1438,13 @@ async def event(
     level="Neuer Levelbereich",
     anmerkung="Neue Anmerkung",
     slots="Neue Slots (z. B. ⚔️:3 🛡️:2)",
+    event="Optional: Event auswählen (nur eigene Events; Admins sehen alle)",
 )
 @bot.tree.command(name="event_edit", description="Bearbeite dein Event (Datum, Zeit, Ort, Level, Slots, Anmerkung)")
+@app_commands.autocomplete(event=event_edit_event_autocomplete)
 async def event_edit(
     interaction: discord.Interaction,
+    event: str = None,
     datum: str = None,
     zeit: str = None,
     ort: str = None,
@@ -1411,22 +1452,47 @@ async def event_edit(
     anmerkung: str = None,
     slots: str = None,
 ):
-    found = get_latest_user_event(interaction.guild.id, interaction.user.id)
-    if not found:
-        await interaction.response.send_message(
-            "❌ Ich finde aktuell kein Event von dir auf diesem Server.",
-            ephemeral=True,
-        )
-        return
+    # Event auswählen (Autocomplete liefert message_id als String in `event`)
+    msg_id = None
+    ev = None
 
-    msg_id, ev = found
-    thread_changes = []
+    if event:
+        try:
+            msg_id = int(re.search(r"(\d{15,21})", str(event)).group(1))
+        except Exception:
+            msg_id = None
 
-    PREFIX_DATE = "🕒 **Datum/Zeit:**"
-    PREFIX_ORG = "📍 **Ort:**"
-    PREFIX_LEVEL = "⚔️ **Levelbereich:**"
+        if msg_id:
+            ev = active_events.get(msg_id)
+            if not ev or ev.get("guild_id") != interaction.guild.id:
+                await interaction.response.send_message(
+                    "❌ Event nicht gefunden.",
+                    ephemeral=True,
+                )
+                return
+            if not can_edit_event(interaction, ev):
+                await interaction.response.send_message(
+                    "❌ Du darfst dieses Event nicht bearbeiten (nur Ersteller oder Admins).",
+                    ephemeral=True,
+                )
+                return
+    else:
+        found = get_latest_user_event(interaction.guild.id, interaction.user.id)
+        if not found:
+            await interaction.response.send_message(
+                "❌ Ich finde aktuell kein Event von dir auf diesem Server.",
+                ephemeral=True,
+            )
+            return
+        msg_id, ev = found
 
-    old_event_time = ev["event_time"]
+        thread_changes = []
+
+        PREFIX_DATE = "🕒 **Datum/Zeit:**"
+        PREFIX_ORG = "📍 **Ort:**"
+        PREFIX_LEVEL = "⚔️ **Levelbereich:**"
+
+        old_event_time = ev["event_time"]
 
     # Datum/Zeit
     if datum or zeit:
@@ -2456,6 +2522,59 @@ async def on_error(event_method, *args, **kwargs):
     print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
     traceback.print_exc()
 
+
+
+async def event_edit_event_autocomplete(interaction: discord.Interaction, current: str):
+    """Autocomplete: zeigt Events auf dem Server – für Ersteller oder Admins."""
+    if interaction.guild is None:
+        return []
+
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+    perms = interaction.user.guild_permissions
+    is_admin = perms.administrator or perms.manage_guild
+
+    items = []
+    for mid, ev in active_events.items():
+        if ev.get("guild_id") != guild_id:
+            continue
+        if not is_admin and int(ev.get("creator_id", 0)) != user_id:
+            continue
+
+        title = str(ev.get("title", "Event"))
+        if current and current.lower() not in title.lower():
+            continue
+
+        when = ""
+        try:
+            if ev.get("event_time"):
+                when = format_de_datetime(ev["event_time"].astimezone(BERLIN_TZ))
+        except Exception:
+            when = ""
+
+        ch_name = ""
+        try:
+            ch = interaction.guild.get_channel(ev.get("channel_id"))
+            ch_name = f" #{ch.name}" if ch else ""
+        except Exception:
+            ch_name = ""
+
+        label = f"{title} — {when}{ch_name}".strip()
+        if len(label) > 100:
+            label = label[:97] + "…"
+
+        items.append(app_commands.Choice(name=label, value=str(mid)))
+
+    def _key(choice):
+        try:
+            ev2 = active_events.get(int(choice.value))
+            t = ev2.get("event_time")
+            return t or datetime.max.replace(tzinfo=pytz.utc)
+        except Exception:
+            return datetime.max.replace(tzinfo=pytz.utc)
+
+    items.sort(key=_key)
+    return items[:25]
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
