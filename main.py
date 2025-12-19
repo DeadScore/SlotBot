@@ -589,6 +589,7 @@ async def reminder_task():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now(pytz.utc)
+        changed = False  # ob wir reminded/afk flags geändert haben (für Persistenz)
         for msg_id, ev in list(active_events.items()):
             guild = bot.get_guild(ev["guild_id"])
             if not guild:
@@ -596,11 +597,19 @@ async def reminder_task():
             event_time = ev.get("event_time")
             if not event_time:
                 continue
+
             for emoji, slot in ev["slots"].items():
-                if "reminded" not in slot:
-                    slot["reminded"] = set()
-                if "afk_dm_sent" not in slot:
-                    slot["afk_dm_sent"] = set()
+                # Robust: immer als Set führen (nach Load sollte es schon Set sein, aber sicher ist sicher)
+                r = slot.get("reminded", set())
+                if not isinstance(r, set):
+                    r = set(r)
+                slot["reminded"] = r
+
+                a = slot.get("afk_dm_sent", set())
+                if not isinstance(a, set):
+                    a = set(a)
+                slot["afk_dm_sent"] = a
+
                 for user_id in list(slot["main"]):
                     seconds_left = (event_time - now).total_seconds()
 
@@ -613,153 +622,33 @@ async def reminder_task():
                                 f"Bitte sei rechtzeitig online."
                             )
                             slot["reminded"].add(user_id)
-                        except Exception:
-                            pass
+                            changed = True
+                        except Exception as e:
+                            print(f"⚠️ Reminder-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
 
                     # 10-Min-AFK-Check
                     if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
                             await member.send(
-                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\n"
-                                f"Das Event startet in **10 Minuten**.\n"
-                                f"Bitte antworte in den nächsten **5 Minuten** hier im Chat, "
-                                f"sonst wirst du automatisch aus deinem Slot entfernt."
+                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\\n"
+                                f"Das Event startet in **10 Minuten**.\\n"
+                                f"Bitte antworte in den nächsten **5 Minuten** mit `bin da`, "
+                                f"sonst wirst du automatisch aus dem Slot entfernt."
                             )
                             slot["afk_dm_sent"].add(user_id)
-                            AFK_PENDING[(guild.id, msg_id, user_id)] = datetime.now(pytz.utc) + timedelta(minutes=5)
-                        except Exception:
-                            pass
-        await asyncio.sleep(30)
+                            AFK_PENDING[(guild.id, int(msg_id), user_id)] = now + timedelta(minutes=5)
+                            changed = True
+                        except Exception as e:
+                            print(f"⚠️ AFK-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
 
-
-async def afk_enforcer_task():
-    """Kickt Nutzer aus dem Slot, die auf den AFK-Check nicht reagiert haben."""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        for key, deadline in list(AFK_PENDING.items()):
-            guild_id, msg_id, user_id = key
-            if now < deadline:
-                continue
-            AFK_PENDING.pop(key, None)
-            ev = active_events.get(msg_id)
-            guild = bot.get_guild(guild_id)
-            if not ev or not guild:
-                continue
-
-            # Suche Slot & entferne User
-            removed_slot_emoji = None
-            promoted_user = None
-            for emoji, slot in ev["slots"].items():
-                if user_id in slot["main"]:
-                    slot["main"].remove(user_id)
-                    removed_slot_emoji = emoji
-                    if slot["waitlist"]:
-                        promoted_user = slot["waitlist"].pop(0)
-                        slot["main"].add(promoted_user)
-                    break
-                if user_id in slot["waitlist"]:
-                    try:
-                        slot["waitlist"].remove(user_id)
-                        removed_slot_emoji = emoji
-                    except ValueError:
-                        pass
-                    break
-
-            if not removed_slot_emoji:
-                continue
-
-            await update_event_message(msg_id)
-            await safe_save()
-
-            # DM an User
+        # Wichtig: Flags speichern, damit ein Restart nicht wieder Reminder spammt
+        if changed:
             try:
-                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                if member:
-                    await member.send(
-                        f"❌ Du wurdest aus dem Event **{ev['title']}** entfernt, "
-                        f"weil du nicht auf den AFK-Check reagiert hast."
-                    )
-            except Exception:
-                pass
+                save_events()
+            except Exception as e:
+                print(f"⚠️ save_events nach Reminder fehlgeschlagen: {e}")
 
-            # Thread-Log
-            from_emoji = removed_slot_emoji
-            try:
-                await log_participation_change(
-                    ev,
-                    guild,
-                    msg_id,
-                    user_id,
-                    from_emoji,
-                    "leave",
-                    "AFK-Check",
-                )
-            except Exception:
-                pass
-
-            # Promotion-Log
-            if promoted_user is not None:
-                try:
-                    member = guild.get_member(promoted_user) or await guild.fetch_member(promoted_user)
-                    if member:
-                        await member.send(
-                            f"🎟️ Gute Nachricht: Du bist jetzt im **Hauptslot** für **{ev['title']}** "
-                            f"(frei geworden durch AFK-Check)."
-                        )
-                except Exception:
-                    pass
-                try:
-                    thread = await get_or_restore_thread(ev, guild, msg_id)
-                    if thread:
-                        await thread.send(
-                            f"🔄 <@{promoted_user}> wurde automatisch aus der Warteliste "
-                            f"in den Hauptslot verschoben (AFK-Check)."
-                        )
-                except Exception:
-                    pass
-
-        await asyncio.sleep(15)
-
-
-async def cleanup_task():
-    """Löscht Event-Nachricht + Thread nach delete_at."""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        to_delete = []
-        for msg_id, ev in list(active_events.items()):
-            delete_at = ev.get("delete_at")
-            if isinstance(delete_at, datetime):
-                if delete_at.tzinfo is None:
-                    delete_at = delete_at.replace(tzinfo=pytz.utc)
-                if now >= delete_at:
-                    to_delete.append((msg_id, ev))
-        for msg_id, ev in to_delete:
-            guild = bot.get_guild(ev["guild_id"])
-            if not guild:
-                active_events.pop(msg_id, None)
-                continue
-            channel = guild.get_channel(ev["channel_id"])
-            try:
-                if channel:
-                    try:
-                        msg = await channel.fetch_message(msg_id)
-                        await msg.delete()
-                    except Exception:
-                        pass
-                # Thread robust löschen
-                thread_id = ev.get("thread_id")
-                if thread_id:
-                    try:
-                        thread = guild.get_channel(thread_id) or await guild.fetch_channel(thread_id)
-                        await thread.delete()
-                    except Exception:
-                        pass
-            finally:
-                active_events.pop(msg_id, None)
-                await safe_save()
         await asyncio.sleep(60)
 
 
@@ -2475,7 +2364,7 @@ def run_bot():
 @bot.event
 async def on_ready():
     global TASKS_STARTED
-    print(f"✅ SlotBot v4.6 online als {bot.user}")
+    print(f"✅ SlotBot v4.6 online als {bot.user} (instance={INSTANCE_ID})")
     loaded = load_events_with_retry()
     active_events.clear()
     active_events.update(loaded)
