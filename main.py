@@ -1035,6 +1035,13 @@ async def roll_command(interaction: discord.Interaction):
 
 
 # ----------------- /start_roll -----------------
+async def event_edit_event_autocomplete(interaction: discord.Interaction, current: str):
+    """Autocomplete: zeigt Events auf dem Server – für Ersteller oder Admins."""
+    if interaction.guild is None:
+        return []
+
+
+
 @app_commands.describe(
     dauer="Dauer der Roll-Runde in Sekunden (z. B. 60) – optional, wenn du stattdessen eine Uhrzeit nutzt",
     uhrzeit="End-Uhrzeit (HH:MM oder z. B. 21, 21:30, 21.30, 21 Uhr) – optional, wenn du stattdessen Dauer nutzt",
@@ -2523,11 +2530,6 @@ async def on_error(event_method, *args, **kwargs):
     traceback.print_exc()
 
 
-
-async def event_edit_event_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete: zeigt Events auf dem Server – für Ersteller oder Admins."""
-    if interaction.guild is None:
-        return []
 
     guild_id = interaction.guild.id
     user_id = interaction.user.id
