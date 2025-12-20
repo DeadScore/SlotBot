@@ -152,7 +152,9 @@
         "slots": {
             "<:DPS_Archetype:1422234733177208863>": {
                 "limit": 8,
-                "main": [],
+                "main": [
+                    254384437679226882
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
