@@ -43,52 +43,6 @@
         "delete_at": "2025-12-20T20:00:00+00:00",
         "art": "PVX"
     },
-    "1451911129667338291": {
-        "title": "Leveln",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 5,
-                "main": [
-                    810253616954343465,
-                    1273360379271053457,
-                    387233904811048962
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Leveln\n\ud83d\udccd **Ort:** Ursine Cave\n\ud83d\udd52 **Datum/Zeit:** Samstag, 20.12.2025 21:00 CET\n\u2694\ufe0f **Levelbereich:** 13+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-12-20T20:00:00+00:00",
-        "thread_id": 1451911129667338291,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-20T21:00:00+00:00",
-        "art": "PVX"
-    },
     "1452022058555936801": {
         "title": "EP farmen",
         "slots": {
