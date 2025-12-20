@@ -67,7 +67,9 @@
             },
             "<:DPS_Archetype:1422234733177208863>": {
                 "limit": 4,
-                "main": [],
+                "main": [
+                    404173735130562562
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
