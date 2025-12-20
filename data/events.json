@@ -43,62 +43,6 @@
         "delete_at": "2025-12-20T20:00:00+00:00",
         "art": "PVX"
     },
-    "1451910531681226952": {
-        "title": "Leveln und Gear",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    404173735130562562
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 2,
-                "main": [
-                    617440482032615434
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [
-                    450705854581309440
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 4,
-                "main": [
-                    398510011485257728,
-                    1273360379271053457,
-                    1027946186700771378,
-                    702183001781698692
-                ],
-                "waitlist": [
-                    506116955862859818,
-                    508348086922510348
-                ],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Leveln und Gear\n\ud83d\udccd **Ort:** SteelBloom\n\ud83d\udd52 **Datum/Zeit:** Samstag, 20.12.2025 21:00 CET\n\u2694\ufe0f **Levelbereich:** 15+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Gruppe\n\ud83d\udc51 **Gruppenlead:** DeadScore\n\ud83d\udcdd **Anmerkung:** Bitte gutes Gear einpacken die gegner haben es in sich.\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-12-20T20:00:00+00:00",
-        "thread_id": 1451910531681226952,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-20T21:00:00+00:00",
-        "art": "PVX"
-    },
     "1451911129667338291": {
         "title": "Leveln",
         "slots": {
