@@ -156,6 +156,36 @@ def parse_time_tolerant(s: str, fallback_hhmm: str) -> str:
     return f"{h:02d}:{mnt:02d}"
 
 
+
+def parse_date_flexible(date_str: str) -> str:
+    """Erlaubt: heute/morgen/übermorgen sowie DD.MM, DD.MM.YY, DD.MM.YYYY. Gibt DD.MM.YYYY zurück."""
+    if not date_str:
+        raise ValueError("Datum fehlt")
+    s = date_str.strip().lower()
+    today = datetime.now(BERLIN_TZ).date()
+
+    if s in ("heute", "today"):
+        d = today
+    elif s in ("morgen", "tomorrow"):
+        d = today + timedelta(days=1)
+    elif s in ("übermorgen", "uebermorgen"):
+        d = today + timedelta(days=2)
+    else:
+        d = None
+        for fmt in ("%d.%m.%Y", "%d.%m.%y", "%d.%m"):
+            try:
+                parsed = datetime.strptime(s, fmt)
+                if fmt == "%d.%m":
+                    d = parsed.replace(year=today.year).date()
+                else:
+                    d = parsed.date()
+                break
+            except ValueError:
+                pass
+        if d is None:
+            raise ValueError("Ungültiges Datum")
+    return d.strftime("%d.%m.%Y")
+
 def to_google_dates(start_utc: datetime, duration_hours: int = 2) -> str:
     end_utc = start_utc + timedelta(hours=duration_hours)
     fmt = "%Y%m%dT%H%M%SZ"
@@ -652,6 +682,108 @@ async def reminder_task():
         await asyncio.sleep(60)
 
 
+async def afk_enforcer_task():
+    """Kickt Nutzer aus Slots, wenn sie nicht rechtzeitig auf den AFK-Check per DM reagieren."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        expired = [(k, dl) for k, dl in AFK_PENDING.items() if dl <= now]
+        for (guild_id, msg_id, user_id), _deadline in expired:
+            AFK_PENDING.pop((guild_id, msg_id, user_id), None)
+            ev = active_events.get(int(msg_id))
+            if not ev:
+                continue
+
+            guild = bot.get_guild(guild_id)
+            if not guild:
+                continue
+
+            changed = False
+            # Entfernen + ggf. Warteliste nachrücken
+            for emoji, slot in ev.get("slots", {}).items():
+                if user_id in slot.get("main", set()):
+                    try:
+                        slot["main"].remove(user_id)
+                    except Exception:
+                        pass
+                    changed = True
+
+                    # Nachrücken
+                    if slot.get("waitlist"):
+                        promoted = slot["waitlist"].pop(0)
+                        slot["main"].add(promoted)
+                        changed = True
+                        # DM an den Nachrücker
+                        try:
+                            member = guild.get_member(promoted) or await guild.fetch_member(promoted)
+                            await member.send(f"🎟️ Du bist jetzt im **Hauptslot** für **{ev['title']}** (nachgerückt).")
+                        except Exception:
+                            pass
+                        # Log im Thread
+                        try:
+                            thread = await get_or_restore_thread(ev, guild, int(msg_id))
+                            if thread:
+                                await thread.send(f"🔄 <@{promoted}> ist aus der Warteliste nachgerückt.")
+                        except Exception:
+                            pass
+
+            if changed:
+                await update_event_message(int(msg_id))
+                await safe_save()
+                try:
+                    channel = guild.get_channel(ev.get("channel_id"))
+                    if channel:
+                        await channel.send(f"🚪 <@{user_id}> wurde wegen AFK aus **{ev['title']}** entfernt.")
+                except Exception:
+                    pass
+
+        await asyncio.sleep(10)
+
+
+async def cleanup_task():
+    """Löscht Events, deren delete_at erreicht ist (Auto-Delete)."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        to_delete = []
+        for msg_id, ev in list(active_events.items()):
+            delete_at = ev.get("delete_at")
+            if isinstance(delete_at, datetime) and delete_at <= now:
+                to_delete.append((msg_id, ev))
+
+        for msg_id, ev in to_delete:
+            guild = bot.get_guild(ev.get("guild_id"))
+            if not guild:
+                active_events.pop(msg_id, None)
+                continue
+
+            # Event Message löschen
+            try:
+                ch = guild.get_channel(ev.get("channel_id")) or await guild.fetch_channel(ev.get("channel_id"))
+                try:
+                    msg = await ch.fetch_message(int(msg_id))
+                    await msg.delete()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # Thread löschen (wenn existiert)
+            thread_id = ev.get("thread_id")
+            if thread_id:
+                try:
+                    thread = guild.get_channel(thread_id) or await guild.fetch_channel(thread_id)
+                    await thread.delete()
+                except Exception:
+                    pass
+
+            active_events.pop(msg_id, None)
+
+        if to_delete:
+            await safe_save()
+
+        await asyncio.sleep(60)
+
 # ----------------- Thread Helper & Logging -----------------
 async def get_or_restore_thread(ev: dict, guild: discord.Guild, base_message_id: int):
     thread = None
@@ -924,10 +1056,58 @@ async def roll_command(interaction: discord.Interaction):
 
 
 # ----------------- /start_roll -----------------
+
 async def event_edit_event_autocomplete(interaction: discord.Interaction, current: str):
     """Autocomplete: zeigt Events auf dem Server – für Ersteller oder Admins."""
     if interaction.guild is None:
         return []
+
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+    perms = interaction.user.guild_permissions
+    is_admin = perms.administrator or perms.manage_guild
+
+    items: List[app_commands.Choice[str]] = []
+    for mid, ev in active_events.items():
+        if ev.get("guild_id") != guild_id:
+            continue
+        if not is_admin and int(ev.get("creator_id", 0)) != user_id:
+            continue
+
+        title = str(ev.get("title", "Event"))
+        if current and current.lower() not in title.lower():
+            continue
+
+        when = ""
+        try:
+            if ev.get("event_time"):
+                when = format_de_datetime(ev["event_time"].astimezone(BERLIN_TZ))
+        except Exception:
+            when = ""
+
+        ch_name = ""
+        try:
+            ch = interaction.guild.get_channel(ev.get("channel_id"))
+            ch_name = f" #{ch.name}" if ch else ""
+        except Exception:
+            ch_name = ""
+
+        label = f"{title} — {when}{ch_name}".strip()
+        if len(label) > 100:
+            label = label[:97] + "…"
+
+        items.append(app_commands.Choice(name=label, value=str(mid)))
+
+    def _key(choice: app_commands.Choice[str]):
+        try:
+            ev2 = active_events.get(int(choice.value))
+            t = ev2.get("event_time")
+            return t or datetime.max.replace(tzinfo=pytz.utc)
+        except Exception:
+            return datetime.max.replace(tzinfo=pytz.utc)
+
+    items.sort(key=_key)
+    return items[:25]
 
 
 
@@ -1165,16 +1345,18 @@ async def event(
 ):
     # Datum/Zeit prüfen
     try:
-        local_date = datetime.strptime(datum, "%d.%m.%Y")
-        local_date = BERLIN_TZ.localize(local_date)
+        datum_norm = parse_date_flexible(datum)
     except Exception:
-        await interaction.response.send_message("❌ Ungültiges Datum! Nutze DD.MM.YYYY", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Ungültiges Datum! Beispiele: `heute`, `morgen`, `übermorgen`, `27.12`, `27.12.2025`",
+            ephemeral=True,
+        )
         return
 
     time_str = parse_time_tolerant(zeit, "20:00")
     try:
         local_dt = BERLIN_TZ.localize(
-            datetime.strptime(f"{datum} {time_str}", "%d.%m.%Y %H:%M")
+            datetime.strptime(f"{datum_norm} {time_str}", "%d.%m.%Y %H:%M")
         )
     except Exception:
         await interaction.response.send_message(
@@ -1257,7 +1439,7 @@ async def event(
     thread_id = None
     try:
         thread = await msg.create_thread(
-            name=f"Event-Log: {zweck} {datum} {time_str}",
+            name=f"Event-Log: {zweck} {datum_norm} {time_str}",
             auto_archive_duration=1440,
         )
         await thread.send(f"🧵 Event-Log für: {zweck} — {msg.jump_url}")
@@ -1398,7 +1580,7 @@ async def event_edit(
             time_str = parse_time_tolerant(zeit, fallback_time) if zeit else fallback_time
             new_local = BERLIN_TZ.localize(
                 datetime.strptime(
-                    f"{datum or old_local.strftime('%d.%m.%Y')} {time_str}",
+                    f"{(parse_date_flexible(datum) if datum else old_local.strftime('%d.%m.%Y'))} {time_str}",
                     "%d.%m.%Y %H:%M",
                 )
             )
@@ -1416,6 +1598,19 @@ async def event_edit(
                 ev["delete_at"] = new_event_time + offset
 
             ev["event_time"] = new_event_time
+            # 🔁 Wenn Datum/Zeit geändert wird: Reminder/AFK-Flags zurücksetzen, damit es neu erinnert
+            for _emoji, _slot in ev["slots"].items():
+                _slot["reminded"] = set()
+                _slot["afk_dm_sent"] = set()
+
+            # offene AFK-Pendings für dieses Event entfernen
+            try:
+                for k in list(AFK_PENDING.keys()):
+                    if k[0] == interaction.guild.id and k[1] == int(msg_id):
+                        AFK_PENDING.pop(k, None)
+            except Exception:
+                pass
+
             thread_changes.append(f"Datum/Zeit: ~~{current_visible}~~ → {new_str}")
         except Exception:
             await interaction.response.send_message(
@@ -1503,7 +1698,7 @@ async def event_edit(
                     + ", ".join(failed_emojis)
                 )
 
-    await update_event_message(msg_id)
+        await update_event_message(msg_id)
     await safe_save()
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
@@ -1513,6 +1708,60 @@ async def event_edit(
         await post_event_update_log(ev, guild, interaction.user.mention, changes, msg_id)
         if any(s.startswith("Datum/Zeit:") for s in thread_changes):
             await post_calendar_links(ev, guild, msg_id)
+
+
+# ----------------- /event_reset_notifications -----------------
+@app_commands.describe(
+    event="Optional: Event auswählen (nur eigene Events; Admins sehen alle)",
+)
+@bot.tree.command(name="event_reset_notifications", description="Setzt Reminder/AFK-Flags für ein Event zurück")
+@app_commands.autocomplete(event=event_edit_event_autocomplete)
+async def event_reset_notifications(interaction: discord.Interaction, event: str = None):
+    if interaction.guild is None:
+        await interaction.response.send_message("❌ Nur auf einem Server nutzbar.", ephemeral=True)
+        return
+
+    msg_id = None
+    ev = None
+
+    if event:
+        try:
+            msg_id = int(re.search(r"(\d{15,21})", str(event)).group(1))
+        except Exception:
+            msg_id = None
+
+        if msg_id:
+            ev = active_events.get(msg_id)
+    else:
+        found = get_latest_user_event(interaction.guild.id, interaction.user.id)
+        if found:
+            msg_id, ev = found
+
+    if not msg_id or not ev or ev.get("guild_id") != interaction.guild.id:
+        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
+        return
+
+    if not can_edit_event(interaction, ev):
+        await interaction.response.send_message(
+            "❌ Du darfst dieses Event nicht zurücksetzen (nur Ersteller oder Admins).",
+            ephemeral=True,
+        )
+        return
+
+    for _emoji, _slot in ev["slots"].items():
+        _slot["reminded"] = set()
+        _slot["afk_dm_sent"] = set()
+
+    try:
+        for k in list(AFK_PENDING.keys()):
+            if k[0] == interaction.guild.id and k[1] == int(msg_id):
+                AFK_PENDING.pop(k, None)
+    except Exception:
+        pass
+
+    await update_event_message(int(msg_id))
+    await safe_save()
+    await interaction.response.send_message("✅ Reminder/AFK zurückgesetzt.", ephemeral=True)
 
 
 # ----------------- /event_delete -----------------
@@ -2418,54 +2667,6 @@ async def on_error(event_method, *args, **kwargs):
     print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
     traceback.print_exc()
 
-
-
-    guild_id = interaction.guild.id
-    user_id = interaction.user.id
-    perms = interaction.user.guild_permissions
-    is_admin = perms.administrator or perms.manage_guild
-
-    items = []
-    for mid, ev in active_events.items():
-        if ev.get("guild_id") != guild_id:
-            continue
-        if not is_admin and int(ev.get("creator_id", 0)) != user_id:
-            continue
-
-        title = str(ev.get("title", "Event"))
-        if current and current.lower() not in title.lower():
-            continue
-
-        when = ""
-        try:
-            if ev.get("event_time"):
-                when = format_de_datetime(ev["event_time"].astimezone(BERLIN_TZ))
-        except Exception:
-            when = ""
-
-        ch_name = ""
-        try:
-            ch = interaction.guild.get_channel(ev.get("channel_id"))
-            ch_name = f" #{ch.name}" if ch else ""
-        except Exception:
-            ch_name = ""
-
-        label = f"{title} — {when}{ch_name}".strip()
-        if len(label) > 100:
-            label = label[:97] + "…"
-
-        items.append(app_commands.Choice(name=label, value=str(mid)))
-
-    def _key(choice):
-        try:
-            ev2 = active_events.get(int(choice.value))
-            t = ev2.get("event_time")
-            return t or datetime.max.replace(tzinfo=pytz.utc)
-        except Exception:
-            return datetime.max.replace(tzinfo=pytz.utc)
-
-    items.sort(key=_key)
-    return items[:25]
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
