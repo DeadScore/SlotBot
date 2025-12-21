@@ -9,6 +9,47 @@ from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, Any, List, Tuple
 
+def parse_date_flexible(date_str: str) -> str:
+    """
+    Flexible date parser.
+    Accepts:
+      - heute / morgen / übermorgen (also uebermorgen)
+      - DD.MM.YYYY
+      - DD.MM.YY
+      - DD.MM  (assumes current year)
+    Returns DD.MM.YYYY
+    """
+    if not date_str:
+        raise ValueError("Datum fehlt")
+
+    s = date_str.strip().lower()
+    today = datetime.now(BERLIN_TZ).date()
+
+    if s in ("heute", "today"):
+        d = today
+    elif s in ("morgen", "tomorrow"):
+        d = today + timedelta(days=1)
+    elif s in ("übermorgen", "uebermorgen"):
+        d = today + timedelta(days=2)
+    else:
+        d = None
+        for fmt in ("%d.%m.%Y", "%d.%m.%y", "%d.%m"):
+            try:
+                parsed = datetime.strptime(s, fmt)
+                if fmt == "%d.%m":
+                    d = parsed.replace(year=today.year).date()
+                else:
+                    d = parsed.date()
+                break
+            except ValueError:
+                pass
+        if d is None:
+            raise ValueError("Ungültiges Datum")
+
+    return d.strftime("%d.%m.%Y")
+
+
+
 import random
 
 import requests
@@ -1271,10 +1312,10 @@ async def event(
 ):
     # Datum/Zeit prüfen
     try:
-        local_date = datetime.strptime(datum, "%d.%m.%Y")
+        local_date = datetime.strptime(parse_date_flexible(datum), "%d.%m.%Y")
         local_date = BERLIN_TZ.localize(local_date)
     except Exception:
-        await interaction.response.send_message("❌ Ungültiges Datum! Nutze DD.MM.YYYY", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültiges Datum! Beispiele: `heute`, `morgen`, `übermorgen`, `27.12`, `27.12.25`, `27.12.2025`", ephemeral=True)
         return
 
     time_str = parse_time_tolerant(zeit, "20:00")
