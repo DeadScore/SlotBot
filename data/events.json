@@ -73,6 +73,41 @@
         "delete_at": "2025-12-22T20:00:00+00:00",
         "art": "PVX"
     },
+    "1452424027162284052": {
+        "title": "Items",
+        "slots": {
+            "Tank_Archetype": {
+                "limit": 1345126746340458527,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "Bard_Archetype": {
+                "limit": 1345126811880914944,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "Cleric_Archetype": {
+                "limit": 1345126828280512683,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Items\n\ud83d\udccd **Ort:** Carphin\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 01.01.2026 19:45 CET\n\u2694\ufe0f **Levelbereich:** 20+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83d\udcdd **Anmerkung:** Raid/Treffpunkt Emberspring Carphin\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 1294305436580843604,
+        "event_time": "2026-01-01T18:45:00+00:00",
+        "thread_id": 1452424027162284052,
+        "auto_delete_stunden": 1,
+        "delete_at": "2026-01-01T19:45:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -343,6 +378,14 @@
             "art": "PVX",
             "created_at": "2025-12-21T17:55:29.351878",
             "event_time": "2025-12-22T19:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 1294305436580843604,
+            "title": "Items",
+            "art": "PvE",
+            "created_at": "2025-12-21T22:14:35.717621",
+            "event_time": "2026-01-01T18:45:00+00:00"
         }
     ]
 }
