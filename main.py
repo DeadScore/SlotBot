@@ -2519,7 +2519,16 @@ async def on_ready():
                 BACKGROUND_TASKS[key] = bot.loop.create_task(factory(), name=f"slotbot_{key}_task")
 
     try:
-        await bot.tree.sync()
+        # Slash-Commands sync: mit GUILD_ID sofort sichtbar, sonst global
+        try:
+            if GUILD_ID:
+                await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+                print(f"✅ Slash-Commands Guild-Sync (GUILD_ID={GUILD_ID})")
+            else:
+                await bot.tree.sync()
+                print("✅ Slash-Commands Global-Sync")
+        except Exception as e:
+            print(f"⚠️ Slash-Commands Sync Fehler: {e}")
         print("📂 Slash Commands synchronisiert")
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
