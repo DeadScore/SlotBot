@@ -119,22 +119,8 @@
     "1452615488495554756": {
         "title": "Items",
         "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "\u2705": {
-                "limit": 20,
+            "Bard_Archetype": {
+                "limit": 1345126811880914944,
                 "main": [],
                 "waitlist": [],
                 "reminded": [],
