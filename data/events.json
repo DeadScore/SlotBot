@@ -1,80 +1,4 @@
 {
-    "1452022058555936801": {
-        "title": "EP farmen",
-        "slots": {
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 8,
-                "main": [
-                    254384437679226882
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** EP farmen\n\ud83d\udccd **Ort:** egal\n\ud83d\udd52 **Datum/Zeit:** Samstag, 20.12.2025 20:45 CET\n\u2694\ufe0f **Levelbereich:** 10+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 254384437679226882,
-        "event_time": "2025-12-20T19:45:00+00:00",
-        "thread_id": 1452022058555936801,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-20T20:45:00+00:00",
-        "art": "PvE"
-    },
-    "1452604807532515529": {
-        "title": "EP farmen (Drops?)",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    350381799005880322
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 1,
-                "main": [
-                    893474722921189386
-                ],
-                "waitlist": [
-                    458890127771435009
-                ],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [
-                    450705854581309440
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 5,
-                "main": [
-                    810253616954343465,
-                    387233904811048962
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\ud83d\udcdd **Anmerkung:** Es hat dort viele oneStar K\u00fche.\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** EP farmen (Drops?)\n\ud83d\udccd **Ort:** N\u00f6rdlich von New Aela (siehe Printscreen)\n\ud83d\udd52 **Datum/Zeit:** Montag, 22.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** ~~16+~~ \u2192 15+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Gruppe\n\ud83d\udc51 **Gruppenlead:** Tank\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 893474722921189386,
-        "event_time": "2025-12-22T19:00:00+00:00",
-        "thread_id": 1452604807532515529,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-22T20:00:00+00:00",
-        "art": "PvE"
-    },
     "1452616583523471431": {
         "title": "Items",
         "slots": {
@@ -152,7 +76,6 @@
             ]
         }
     },
-    "_points": {},
     "_history": [
         {
             "guild_id": 1420155879759675496,
