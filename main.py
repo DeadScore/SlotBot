@@ -1279,7 +1279,6 @@ async def stop_roll_command(interaction: discord.Interaction):
     art="Art des Events (PvE/PvP/PVX)",
     zweck="Zweck (z. B. EP Farmen)",
     ort="Ort (z. B. Carphin)",
-    treffpunkt="Optional: Treffpunkt (z. B. \"Vor dem Stall\")",
     zeit="Zeit (z. B. 20:00, 20, 20 Uhr)",
     datum="Datum im Format DD.MM.YYYY",
     level="Levelbereich",
@@ -1306,9 +1305,9 @@ async def event(
     level: str,
     stil: app_commands.Choice[str],
     slots: str,
-    treffpunkt: str = None,
     typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
+    treffpunkt: str = None,
     anmerkung: str = None,
     auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
@@ -1443,7 +1442,6 @@ async def event(
         "auto_delete_stunden": int(auto_delete_stunden),
         "delete_at": delete_at,
         "art": art.value,
-        "treffpunkt": treffpunkt,
     }
 
     # History-Eintrag
@@ -1616,33 +1614,7 @@ async def event_edit(
             current_visible = m.group(1) if m else "?"
         ev["header"] = replace_with_struck(ev["header"], PREFIX_ORG, current_visible, ort)
         thread_changes.append(f"Ort: ~~{current_visible}~~ → {ort}")
-    # Treffpunkt
-    if treffpunkt is not None:
-        tp = treffpunkt.strip() if isinstance(treffpunkt, str) else None
 
-        if tp:
-            # ersetzen, wenn schon vorhanden – sonst nach Ort einfügen
-            if re.search(r"^📌 \*\*Treffpunkt:\*\* .+$", ev["header"], re.M):
-                ev["header"] = re.sub(
-                    r"^📌 \*\*Treffpunkt:\*\* .+$",
-                    f"📌 **Treffpunkt:** {tp}",
-                    ev["header"],
-                    flags=re.M,
-                )
-            else:
-                ev["header"] = re.sub(
-                    r"^(📍 \*\*Ort:\*\* .+)$",
-                    "\\1\n📌 **Treffpunkt:** " + tp,
-                    ev["header"],
-                    flags=re.M,
-                )
-            thread_changes.append(f"Treffpunkt: ~~–~~ → {tp}")
-        else:
-            # leer = entfernen
-            ev["header"] = re.sub(r"^📌 \*\*Treffpunkt:\*\* .+\n?", "", ev["header"], flags=re.M)
-            thread_changes.append("Treffpunkt entfernt")
-
-        ev["treffpunkt"] = tp if tp else None
     # Level
     if level:
         current_visible = extract_current_value(ev["header"], rf"^{re.escape(PREFIX_LEVEL)} ")
@@ -2519,16 +2491,7 @@ async def on_ready():
                 BACKGROUND_TASKS[key] = bot.loop.create_task(factory(), name=f"slotbot_{key}_task")
 
     try:
-        # Slash-Commands sync: mit GUILD_ID sofort sichtbar, sonst global
-        try:
-            if GUILD_ID:
-                await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-                print(f"✅ Slash-Commands Guild-Sync (GUILD_ID={GUILD_ID})")
-            else:
-                await bot.tree.sync()
-                print("✅ Slash-Commands Global-Sync")
-        except Exception as e:
-            print(f"⚠️ Slash-Commands Sync Fehler: {e}")
+        await bot.tree.sync()
         print("📂 Slash Commands synchronisiert")
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
@@ -2548,6 +2511,55 @@ async def on_error(event_method, *args, **kwargs):
     import traceback
     print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
     traceback.print_exc()
+
+
+
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+    perms = interaction.user.guild_permissions
+    is_admin = perms.administrator or perms.manage_guild
+
+    items = []
+    for mid, ev in active_events.items():
+        if ev.get("guild_id") != guild_id:
+            continue
+        if not is_admin and int(ev.get("creator_id", 0)) != user_id:
+            continue
+
+        title = str(ev.get("title", "Event"))
+        if current and current.lower() not in title.lower():
+            continue
+
+        when = ""
+        try:
+            if ev.get("event_time"):
+                when = format_de_datetime(ev["event_time"].astimezone(BERLIN_TZ))
+        except Exception:
+            when = ""
+
+        ch_name = ""
+        try:
+            ch = interaction.guild.get_channel(ev.get("channel_id"))
+            ch_name = f" #{ch.name}" if ch else ""
+        except Exception:
+            ch_name = ""
+
+        label = f"{title} — {when}{ch_name}".strip()
+        if len(label) > 100:
+            label = label[:97] + "…"
+
+        items.append(app_commands.Choice(name=label, value=str(mid)))
+
+    def _key(choice):
+        try:
+            ev2 = active_events.get(int(choice.value))
+            t = ev2.get("event_time")
+            return t or datetime.max.replace(tzinfo=pytz.utc)
+        except Exception:
+            return datetime.max.replace(tzinfo=pytz.utc)
+
+    items.sort(key=_key)
+    return items[:25]
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
