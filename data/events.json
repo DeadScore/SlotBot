@@ -116,6 +116,48 @@
         "delete_at": "2025-12-22T20:00:00+00:00",
         "art": "PvE"
     },
+    "1452616583523471431": {
+        "title": "Items",
+        "slots": {
+            "<:Tank_Archetype:1345126746340458527>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Cleric_Archetype:1345126828280512683>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Bard_Archetype:1345126811880914944>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "\u2705": {
+                "limit": 25,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Items\n\ud83d\udccd **Ort:** Carphin\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 01.01.2026 19:30 CET\n\u2694\ufe0f **Levelbereich:** 18+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Raid\n\ud83d\udcdd **Anmerkung:** Treffpunkt ist beim Carphin Emberspring\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 1294305436580843604,
+        "event_time": "2026-01-01T18:30:00+00:00",
+        "thread_id": 1452616583523471431,
+        "auto_delete_stunden": 1,
+        "delete_at": "2026-01-01T19:30:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -410,6 +452,14 @@
             "art": "PvE",
             "created_at": "2025-12-22T10:55:23.494257",
             "event_time": "2026-01-01T18:45:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 1294305436580843604,
+            "title": "Items",
+            "art": "PvE",
+            "created_at": "2025-12-22T10:59:45.110419",
+            "event_time": "2026-01-01T18:30:00+00:00"
         }
     ]
 }
