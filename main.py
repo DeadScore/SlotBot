@@ -1478,6 +1478,7 @@ async def event(
     datum="Neues Datum (DD.MM.YYYY)",
     zeit="Neue Zeit (z. B. 22, 22.15, 22:15, 22 Uhr)",
     ort="Neuer Ort",
+    treffpunkt="Neuer Treffpunkt (optional)",
     level="Neuer Levelbereich",
     anmerkung="Neue Anmerkung",
     slots="Neue Slots (z. B. ⚔️:3 🛡️:2)",
