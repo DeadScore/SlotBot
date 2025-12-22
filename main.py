@@ -8,6 +8,8 @@ import base64
 from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, Any, List, Tuple
+GUILD_ID = int(os.environ.get("GUILD_ID", "0") or "0")
+
 
 def parse_date_flexible(date_str: str) -> str:
     """
@@ -1286,7 +1288,8 @@ async def stop_roll_command(interaction: discord.Interaction):
     slots="Slots (z. B. ⚔️:2 🛡️:1)",
     typ="Optional: Gruppe oder Raid",
     gruppenlead="Optional: Gruppenleiter",
-    anmerkung="Optional: Freitext",
+    treffpunkt="Optional: Treffpunkt",
+        anmerkung="Optional: Freitext",
     auto_delete_stunden="Nach wie vielen Stunden nach Eventstart das Event automatisch gelöscht werden soll (Standard: 1)",
 )
 @app_commands.choices(
@@ -2491,7 +2494,15 @@ async def on_ready():
                 BACKGROUND_TASKS[key] = bot.loop.create_task(factory(), name=f"slotbot_{key}_task")
 
     try:
-        await bot.tree.sync()
+        try:
+            if GUILD_ID:
+                await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+                print(f"✅ Slash-Commands: Guild-Sync (GUILD_ID={GUILD_ID})")
+            else:
+                await bot.tree.sync()
+                print("✅ Slash-Commands: Global-Sync")
+        except Exception as e:
+            print(f"⚠️ Slash-Commands Sync Fehler: {e}")
         print("📂 Slash Commands synchronisiert")
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
