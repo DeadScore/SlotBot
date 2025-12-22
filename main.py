@@ -1492,6 +1492,7 @@ async def event_edit(
     datum: str = None,
     zeit: str = None,
     ort: str = None,
+    treffpunkt: str = None,
     level: str = None,
     anmerkung: str = None,
     slots: str = None,
