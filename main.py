@@ -1,4 +1,3 @@
-
 import os
 import re
 import io
@@ -670,191 +669,206 @@ def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
 async def reminder_task():
     """Reminder 20 Min vorher + AFK-Check 10 Min vorher (DM)."""
     await bot.wait_until_ready()
+    print("🟢 reminder_task gestartet")
     while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        changed = False  # ob wir reminded/afk flags geändert haben (für Persistenz)
-        for msg_id, ev in list(active_events.items()):
-            guild = bot.get_guild(ev["guild_id"])
-            if not guild:
-                continue
-            event_time = ev.get("event_time")
-            if not event_time:
-                continue
-            try:
-                event_time = ensure_utc_datetime(event_time)
-            except Exception:
-                continue
+        try:
+            now = datetime.now(pytz.utc)
+            changed = False  # ob wir reminded/afk flags geändert haben (für Persistenz)
+            for msg_id, ev in list(active_events.items()):
+                guild = bot.get_guild(ev["guild_id"])
+                if not guild:
+                    continue
+                event_time = ev.get("event_time")
+                if not event_time:
+                    continue
+                try:
+                    event_time = ensure_utc_datetime(event_time)
+                except Exception:
+                    continue
 
-            for emoji, slot in ev["slots"].items():
-                # Robust: immer als Set führen (nach Load sollte es schon Set sein, aber sicher ist sicher)
-                r = slot.get("reminded", set())
-                if not isinstance(r, set):
-                    r = set(r)
-                slot["reminded"] = r
+                for emoji, slot in ev["slots"].items():
+                    # Robust: immer als Set führen (nach Load sollte es schon Set sein, aber sicher ist sicher)
+                    r = slot.get("reminded", set())
+                    if not isinstance(r, set):
+                        r = set(r)
+                    slot["reminded"] = r
 
-                a = slot.get("afk_dm_sent", set())
-                if not isinstance(a, set):
-                    a = set(a)
-                slot["afk_dm_sent"] = a
+                    a = slot.get("afk_dm_sent", set())
+                    if not isinstance(a, set):
+                        a = set(a)
+                    slot["afk_dm_sent"] = a
 
-                for user_id in list(slot["main"]):
-                    try:
-                        seconds_left = (event_time - now).total_seconds()
-                    except Exception as e:
-                        print(f"⚠️ reminder_task Zeitfehler (event={msg_id}): {e}")
-                        continue
-
-                    # 20-Min-Reminder
-                    if 0 <= seconds_left <= 20 * 60 and user_id not in slot["reminded"]:
+                    for user_id in list(slot["main"]):
                         try:
-                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"⏰ Dein Event **{ev['title']}** startet in **20 Minuten**! "
-                                f"Bitte sei rechtzeitig online."
-                            )
-                            slot["reminded"].add(user_id)
-                            changed = True
+                            seconds_left = (event_time - now).total_seconds()
                         except Exception as e:
-                            print(f"⚠️ Reminder-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
+                            print(f"⚠️ reminder_task Zeitfehler (event={msg_id}): {e}")
+                            continue
 
-                    # 10-Min-AFK-Check
-                    if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
-                        try:
-                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                            await member.send(
-                                f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\\n"
-                                f"Das Event startet in **10 Minuten**.\\n"
-                                f"Bitte antworte in den nächsten **5 Minuten** mit `bin da`, "
-                                f"sonst wirst du automatisch aus dem Slot entfernt."
-                            )
-                            slot["afk_dm_sent"].add(user_id)
-                            AFK_PENDING[(guild.id, int(msg_id), user_id)] = now + timedelta(minutes=5)
-                            changed = True
-                        except Exception as e:
-                            print(f"⚠️ AFK-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
+                        # 20-Min-Reminder
+                        if 0 <= seconds_left <= 20 * 60 and user_id not in slot["reminded"]:
+                            try:
+                                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                                await member.send(
+                                    f"⏰ Dein Event **{ev['title']}** startet in **20 Minuten**! "
+                                    f"Bitte sei rechtzeitig online."
+                                )
+                                slot["reminded"].add(user_id)
+                                changed = True
+                            except Exception as e:
+                                print(f"⚠️ Reminder-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
 
-        # Wichtig: Flags speichern, damit ein Restart nicht wieder Reminder spammt
-        if changed:
-            try:
-                save_events()
-            except Exception as e:
-                print(f"⚠️ save_events nach Reminder fehlgeschlagen: {e}")
+                        # 10-Min-AFK-Check
+                        if 0 <= seconds_left <= 10 * 60 and user_id not in slot["afk_dm_sent"]:
+                            try:
+                                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                                await member.send(
+                                    f"👀 AFK-Check für **{ev['title']}** in {guild.name}:\\n"
+                                    f"Das Event startet in **10 Minuten**.\\n"
+                                    f"Bitte antworte in den nächsten **5 Minuten** mit `bin da`, "
+                                    f"sonst wirst du automatisch aus dem Slot entfernt."
+                                )
+                                slot["afk_dm_sent"].add(user_id)
+                                AFK_PENDING[(guild.id, int(msg_id), user_id)] = now + timedelta(minutes=5)
+                                changed = True
+                            except Exception as e:
+                                print(f"⚠️ AFK-DM fehlgeschlagen (user={user_id}, guild={guild.id}): {e}")
 
-        await asyncio.sleep(60)
-
-
-
-async def afk_enforcer_task():
-    """Entfernt Spieler aus Slots, wenn sie beim AFK-Check nicht antworten."""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        expired = [(k, dl) for k, dl in list(AFK_PENDING.items()) if dl <= now]
-        for (guild_id, msg_id, user_id), _deadline in expired:
-            AFK_PENDING.pop((guild_id, msg_id, user_id), None)
-            ev = active_events.get(int(msg_id))
-            if not ev:
-                continue
-
-            guild = bot.get_guild(guild_id)
-            if not guild:
-                continue
-
-            changed = False
-            # user aus allen main slots entfernen
-            for _emoji, slot in ev.get("slots", {}).items():
-                mains = slot.get("main", set())
-                if not isinstance(mains, set):
-                    mains = set(mains)
-                if user_id in mains:
-                    mains.remove(user_id)
-                    slot["main"] = mains
-                    changed = True
-
+            # Wichtig: Flags speichern, damit ein Restart nicht wieder Reminder spammt
             if changed:
-                active_events[int(msg_id)] = ev
                 try:
                     save_events()
                 except Exception as e:
-                    print(f"⚠️ save_events (AFK Enforcer) fehlgeschlagen: {e}")
+                    print(f"⚠️ save_events nach Reminder fehlgeschlagen: {e}")
 
-                # Event-Post aktualisieren
-                try:
-                    await update_event_message(int(msg_id))
-                except Exception as e:
-                    print(f"⚠️ update_event_message (AFK Enforcer) fehlgeschlagen: {e}")
+            await asyncio.sleep(60)
 
-                # optional: Channel Info
-                try:
-                    ch = guild.get_channel(ev.get("channel_id"))
-                    if ch:
-                        await ch.send(f"🚪 <@{user_id}> wurde wegen AFK aus dem Event entfernt.")
-                except Exception:
-                    pass
 
-        await asyncio.sleep(10)
 
+        except Exception as e:
+            print(f"⚠️ reminder_task Loop-Fehler: {e}")
+            import traceback; traceback.print_exc()
+async def afk_enforcer_task():
+    """Entfernt Spieler aus Slots, wenn sie beim AFK-Check nicht antworten."""
+    await bot.wait_until_ready()
+    print("🟢 afk_enforcer_task gestartet")
+    while not bot.is_closed():
+        try:
+            now = datetime.now(pytz.utc)
+            expired = [(k, dl) for k, dl in list(AFK_PENDING.items()) if dl <= now]
+            for (guild_id, msg_id, user_id), _deadline in expired:
+                AFK_PENDING.pop((guild_id, msg_id, user_id), None)
+                ev = active_events.get(int(msg_id))
+                if not ev:
+                    continue
+
+                guild = bot.get_guild(guild_id)
+                if not guild:
+                    continue
+
+                changed = False
+                # user aus allen main slots entfernen
+                for _emoji, slot in ev.get("slots", {}).items():
+                    mains = slot.get("main", set())
+                    if not isinstance(mains, set):
+                        mains = set(mains)
+                    if user_id in mains:
+                        mains.remove(user_id)
+                        slot["main"] = mains
+                        changed = True
+
+                if changed:
+                    active_events[int(msg_id)] = ev
+                    try:
+                        save_events()
+                    except Exception as e:
+                        print(f"⚠️ save_events (AFK Enforcer) fehlgeschlagen: {e}")
+
+                    # Event-Post aktualisieren
+                    try:
+                        await update_event_message(int(msg_id))
+                    except Exception as e:
+                        print(f"⚠️ update_event_message (AFK Enforcer) fehlgeschlagen: {e}")
+
+                    # optional: Channel Info
+                    try:
+                        ch = guild.get_channel(ev.get("channel_id"))
+                        if ch:
+                            await ch.send(f"🚪 <@{user_id}> wurde wegen AFK aus dem Event entfernt.")
+                    except Exception:
+                        pass
+
+            await asyncio.sleep(10)
+
+        except Exception as e:
+            print(f"⚠️ afk_enforcer_task Loop-Fehler: {e}")
+            import traceback; traceback.print_exc()
 async def cleanup_task():
     """Löscht abgelaufene Events nach delete_at."""
     await bot.wait_until_ready()
+    print("🟢 cleanup_task gestartet")
     while not bot.is_closed():
-        now = datetime.now(pytz.utc)
-        removed_any = False
+        try:
+            now = datetime.now(pytz.utc)
+            removed_any = False
 
-        for msg_id, ev in list(active_events.items()):
-            delete_at = ev.get("delete_at")
-            if not delete_at:
-                continue
-            try:
-                delete_at = ensure_utc_datetime(delete_at)
-            except Exception:
-                continue
-
-            if now < delete_at:
-                continue
-
-            guild = bot.get_guild(ev.get("guild_id"))
-            if not guild:
-                # trotzdem entfernen, sonst bleibt Müll liegen
-                active_events.pop(int(msg_id), None)
-                removed_any = True
-                continue
-
-            # Message löschen
-            try:
-                channel = guild.get_channel(ev.get("channel_id")) or await guild.fetch_channel(ev.get("channel_id"))
+            for msg_id, ev in list(active_events.items()):
+                delete_at = ev.get("delete_at")
+                if not delete_at:
+                    continue
                 try:
-                    msg = await channel.fetch_message(int(msg_id))
-                    await msg.delete()
+                    delete_at = ensure_utc_datetime(delete_at)
+                except Exception:
+                    continue
+
+                if now < delete_at:
+                    continue
+
+                guild = bot.get_guild(ev.get("guild_id"))
+                if not guild:
+                    # trotzdem entfernen, sonst bleibt Müll liegen
+                    active_events.pop(int(msg_id), None)
+                    removed_any = True
+                    continue
+
+                # Message löschen
+                try:
+                    channel = guild.get_channel(ev.get("channel_id")) or await guild.fetch_channel(ev.get("channel_id"))
+                    try:
+                        msg = await channel.fetch_message(int(msg_id))
+                        await msg.delete()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-            except Exception:
-                pass
 
-            # Thread löschen, falls vorhanden
-            try:
-                thread_id = ev.get("thread_id")
-                if thread_id:
-                    th = guild.get_thread(int(thread_id))
-                    if not th:
-                        th = await bot.fetch_channel(int(thread_id))
-                    if th:
-                        await th.delete()
-            except Exception:
-                pass
+                # Thread löschen, falls vorhanden
+                try:
+                    thread_id = ev.get("thread_id")
+                    if thread_id:
+                        th = guild.get_thread(int(thread_id))
+                        if not th:
+                            th = await bot.fetch_channel(int(thread_id))
+                        if th:
+                            await th.delete()
+                except Exception:
+                    pass
 
-            active_events.pop(int(msg_id), None)
-            removed_any = True
+                active_events.pop(int(msg_id), None)
+                removed_any = True
 
-        if removed_any:
-            try:
-                save_events()
-            except Exception as e:
-                print(f"⚠️ save_events (cleanup) fehlgeschlagen: {e}")
+            if removed_any:
+                try:
+                    save_events()
+                except Exception as e:
+                    print(f"⚠️ save_events (cleanup) fehlgeschlagen: {e}")
 
-        await asyncio.sleep(60)
+            await asyncio.sleep(60)
 
 
+        except Exception as e:
+            print(f"⚠️ cleanup_task Loop-Fehler: {e}")
+            import traceback; traceback.print_exc()
 async def watchdog_task():
     """Restartet Background-Tasks falls sie abstürzen (ohne auf on_ready zu warten)."""
     await bot.wait_until_ready()
