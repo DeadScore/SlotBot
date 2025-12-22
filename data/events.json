@@ -53,8 +53,8 @@
                 "main": [
                     404173735130562562,
                     506116955862859818,
-                    616690315667177484,
                     508348086922510348,
+                    616690315667177484,
                     770603455810895922
                 ],
                 "waitlist": [],
@@ -71,6 +71,48 @@
         "auto_delete_stunden": 1,
         "delete_at": "2025-12-22T20:00:00+00:00",
         "art": "PVX"
+    },
+    "1452604807532515529": {
+        "title": "EP farmen (Drops?)",
+        "slots": {
+            "<:Tank_Archetype:1345126746340458527>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Cleric_Archetype:1345126828280512683>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Bard_Archetype:1345126811880914944>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:DPS_Archetype:1422234733177208863>": {
+                "limit": 5,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** EP farmen (Drops?)\n\ud83d\udccd **Ort:** N\u00f6rdlich von New Aela (siehe Printscreen)\n\ud83d\udd52 **Datum/Zeit:** Montag, 22.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** 16+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Gruppe\n\ud83d\udc51 **Gruppenlead:** Tank\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 893474722921189386,
+        "event_time": "2025-12-22T19:00:00+00:00",
+        "thread_id": 1452604807532515529,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-22T20:00:00+00:00",
+        "art": "PvE"
     },
     "_subscriptions": {
         "1420155879759675496": {
@@ -350,6 +392,14 @@
             "art": "PvE",
             "created_at": "2025-12-21T22:14:35.717621",
             "event_time": "2026-01-01T18:45:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 893474722921189386,
+            "title": "EP farmen (Drops?)",
+            "art": "PvE",
+            "created_at": "2025-12-22T10:12:57.939747",
+            "event_time": "2025-12-22T19:00:00+00:00"
         }
     ]
 }
