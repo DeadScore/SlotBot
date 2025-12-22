@@ -9,6 +9,11 @@ from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, Any, List, Tuple
 
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+
+
+if not DISCORD_TOKEN:
+    raise RuntimeError("DISCORD_TOKEN fehlt in den Render Environment Variables.")
 def parse_date_flexible(date_str: str) -> str:
     """
     Flexible date parser.
