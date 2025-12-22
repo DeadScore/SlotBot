@@ -8,8 +8,6 @@ import base64
 from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, Any, List, Tuple
-GUILD_ID = int(os.environ.get("GUILD_ID", "0") or "0")
-
 
 def parse_date_flexible(date_str: str) -> str:
     """
@@ -745,6 +743,118 @@ async def reminder_task():
         await asyncio.sleep(60)
 
 
+
+async def afk_enforcer_task():
+    """Entfernt Spieler aus Slots, wenn sie beim AFK-Check nicht antworten."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        expired = [(k, dl) for k, dl in list(AFK_PENDING.items()) if dl <= now]
+        for (guild_id, msg_id, user_id), _deadline in expired:
+            AFK_PENDING.pop((guild_id, msg_id, user_id), None)
+            ev = active_events.get(int(msg_id))
+            if not ev:
+                continue
+
+            guild = bot.get_guild(guild_id)
+            if not guild:
+                continue
+
+            changed = False
+            # user aus allen main slots entfernen
+            for _emoji, slot in ev.get("slots", {}).items():
+                mains = slot.get("main", set())
+                if not isinstance(mains, set):
+                    mains = set(mains)
+                if user_id in mains:
+                    mains.remove(user_id)
+                    slot["main"] = mains
+                    changed = True
+
+            if changed:
+                active_events[int(msg_id)] = ev
+                try:
+                    save_events()
+                except Exception as e:
+                    print(f"⚠️ save_events (AFK Enforcer) fehlgeschlagen: {e}")
+
+                # Event-Post aktualisieren
+                try:
+                    await update_event_message(int(msg_id))
+                except Exception as e:
+                    print(f"⚠️ update_event_message (AFK Enforcer) fehlgeschlagen: {e}")
+
+                # optional: Channel Info
+                try:
+                    ch = guild.get_channel(ev.get("channel_id"))
+                    if ch:
+                        await ch.send(f"🚪 <@{user_id}> wurde wegen AFK aus dem Event entfernt.")
+                except Exception:
+                    pass
+
+        await asyncio.sleep(10)
+
+async def cleanup_task():
+    """Löscht abgelaufene Events nach delete_at."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(pytz.utc)
+        removed_any = False
+
+        for msg_id, ev in list(active_events.items()):
+            delete_at = ev.get("delete_at")
+            if not delete_at:
+                continue
+            try:
+                delete_at = ensure_utc_datetime(delete_at)
+            except Exception:
+                continue
+
+            if now < delete_at:
+                continue
+
+            guild = bot.get_guild(ev.get("guild_id"))
+            if not guild:
+                # trotzdem entfernen, sonst bleibt Müll liegen
+                active_events.pop(int(msg_id), None)
+                removed_any = True
+                continue
+
+            # Message löschen
+            try:
+                channel = guild.get_channel(ev.get("channel_id")) or await guild.fetch_channel(ev.get("channel_id"))
+                try:
+                    msg = await channel.fetch_message(int(msg_id))
+                    await msg.delete()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # Thread löschen, falls vorhanden
+            try:
+                thread_id = ev.get("thread_id")
+                if thread_id:
+                    th = guild.get_thread(int(thread_id))
+                    if not th:
+                        th = await bot.fetch_channel(int(thread_id))
+                    if th:
+                        await th.delete()
+            except Exception:
+                pass
+
+            active_events.pop(int(msg_id), None)
+            removed_any = True
+
+        if removed_any:
+            try:
+                save_events()
+            except Exception as e:
+                print(f"⚠️ save_events (cleanup) fehlgeschlagen: {e}")
+
+        await asyncio.sleep(60)
+
+
 async def watchdog_task():
     """Restartet Background-Tasks falls sie abstürzen (ohne auf on_ready zu warten)."""
     await bot.wait_until_ready()
@@ -903,9 +1013,9 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "**Erstellt ein neues Event mit Slots & Thread.**\n"
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
-            "Optional: `typ`, `gruppenlead`, `treffpunkt`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
+            "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            '`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" treffpunkt:"Vor dem Stall" datum:heute zeit:20:00`\noder: `/event ... datum:morgen zeit:21`\noder klassisch: `/event ... datum:27.10.2025 zeit:20:00`\n'
+            '`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:heute zeit:20:00`\noder: `/event ... datum:morgen zeit:21`\noder klassisch: `/event ... datum:27.10.2025 zeit:20:00`\n'
             '`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n'
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
@@ -1288,8 +1398,7 @@ async def stop_roll_command(interaction: discord.Interaction):
     slots="Slots (z. B. ⚔️:2 🛡️:1)",
     typ="Optional: Gruppe oder Raid",
     gruppenlead="Optional: Gruppenleiter",
-    treffpunkt="Optional: Treffpunkt",
-        anmerkung="Optional: Freitext",
+    anmerkung="Optional: Freitext",
     auto_delete_stunden="Nach wie vielen Stunden nach Eventstart das Event automatisch gelöscht werden soll (Standard: 1)",
 )
 @app_commands.choices(
@@ -1310,7 +1419,6 @@ async def event(
     slots: str,
     typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
-    treffpunkt: str = None,
     anmerkung: str = None,
     auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
@@ -1358,7 +1466,6 @@ async def event(
         sep,
         f"🎯 **Zweck:** {zweck}",
         f"📍 **Ort:** {ort}",
-        *([f"📌 **Treffpunkt:** {treffpunkt}"] if treffpunkt else []),
         f"🕒 **Datum/Zeit:** {time_str_long}",
         f"⚔️ **Levelbereich:** {level}",
         f"💬 **Stil:** {stil.value}",
@@ -2494,15 +2601,7 @@ async def on_ready():
                 BACKGROUND_TASKS[key] = bot.loop.create_task(factory(), name=f"slotbot_{key}_task")
 
     try:
-        try:
-            if GUILD_ID:
-                await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-                print(f"✅ Slash-Commands: Guild-Sync (GUILD_ID={GUILD_ID})")
-            else:
-                await bot.tree.sync()
-                print("✅ Slash-Commands: Global-Sync")
-        except Exception as e:
-            print(f"⚠️ Slash-Commands Sync Fehler: {e}")
+        await bot.tree.sync()
         print("📂 Slash Commands synchronisiert")
     except Exception as e:
         print(f"❌ Sync-Fehler: {e}")
