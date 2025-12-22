@@ -14,47 +14,6 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN fehlt in den Render Environment Variables.")
-def parse_date_flexible(date_str: str) -> str:
-    """
-    Flexible date parser.
-    Accepts:
-      - heute / morgen / übermorgen (also uebermorgen)
-      - DD.MM.YYYY
-      - DD.MM.YY
-      - DD.MM  (assumes current year)
-    Returns DD.MM.YYYY
-    """
-    if not date_str:
-        raise ValueError("Datum fehlt")
-
-    s = date_str.strip().lower()
-    today = datetime.now(BERLIN_TZ).date()
-
-    if s in ("heute", "today"):
-        d = today
-    elif s in ("morgen", "tomorrow"):
-        d = today + timedelta(days=1)
-    elif s in ("übermorgen", "uebermorgen"):
-        d = today + timedelta(days=2)
-    else:
-        d = None
-        for fmt in ("%d.%m.%Y", "%d.%m.%y", "%d.%m"):
-            try:
-                parsed = datetime.strptime(s, fmt)
-                if fmt == "%d.%m":
-                    d = parsed.replace(year=today.year).date()
-                else:
-                    d = parsed.date()
-                break
-            except ValueError:
-                pass
-        if d is None:
-            raise ValueError("Ungültiges Datum")
-
-    return d.strftime("%d.%m.%Y")
-
-
-
 import random
 
 import requests
@@ -154,8 +113,6 @@ async def _post_roll_result(channel: discord.abc.Messageable, guild: discord.Gui
     await channel.send(embed=result)
 
 
-# Punkte-System (DKP-ähnlich): guild_id -> {user_id: points}
-POINTS: Dict[int, Dict[int, int]] = {}
 
 # Background-Tasks (werden in on_ready gestartet und für Health-Checks genutzt)
 BACKGROUND_TASKS: Dict[str, asyncio.Task] = {}
@@ -437,12 +394,11 @@ def put_empty_events(obj):
 
 
 def load_events_once() -> Dict[int, Dict[str, Any]]:
-    global SUBSCRIPTIONS, EVENT_HISTORY, POINTS
+    global SUBSCRIPTIONS, EVENT_HISTORY
     if not GITHUB_TOKEN:
         print("⚠️ GITHUB_TOKEN fehlt – starte ohne Persistenz.")
         SUBSCRIPTIONS = {}
         EVENT_HISTORY = []
-        POINTS = {}
         return {}
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     try:
@@ -476,31 +432,9 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
                 EVENT_HISTORY = hist_raw
             else:
                 EVENT_HISTORY = []
-
-            # Punkte-System einlesen
-            points_raw = raw.get("_points")
-            if isinstance(points_raw, dict):
-                pts: Dict[int, Dict[int, int]] = {}
-                for g_id_str, mapping in points_raw.items():
-                    try:
-                        g_id = int(g_id_str)
-                    except Exception:
-                        continue
-                    inner: Dict[int, int] = {}
-                    if isinstance(mapping, dict):
-                        for u_id_str, value in mapping.items():
-                            try:
-                                inner[int(u_id_str)] = int(value)
-                            except Exception:
-                                continue
-                    pts[g_id] = inner
-                POINTS = pts
-            else:
-                POINTS = {}
-
             # Events laden (alles außer den Sonderkeys)
             for k, ev in raw.items():
-                if k in ("_subscriptions", "_history", "_points"):
+                if k in ("_subscriptions", "_history"):
                     continue
                 for key in ("creator_id", "channel_id", "guild_id", "thread_id"):
                     if key in ev:
@@ -535,7 +469,6 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
             put_empty_events({})
             SUBSCRIPTIONS = {}
             EVENT_HISTORY = []
-            POINTS = {}
             return {}
         else:
             print(f"⚠️ Fehler beim Laden: HTTP {r.status_code}")
@@ -543,7 +476,6 @@ def load_events_once() -> Dict[int, Dict[str, Any]]:
         print(f"❌ Fehler beim Laden von events.json: {e}")
     SUBSCRIPTIONS = {}
     EVENT_HISTORY = []
-    POINTS = {}
     return {}
 
 
@@ -600,13 +532,6 @@ def save_events():
         serializable["_subscriptions"] = subs_out
 
         # Punkte (DKP)
-        points_out: Dict[str, Dict[str, int]] = {}
-        for g_id, mapping in POINTS.items():
-            inner: Dict[str, int] = {}
-            for u_id, value in mapping.items():
-                inner[str(u_id)] = int(value)
-            points_out[str(g_id)] = inner
-        serializable["_points"] = points_out
 
         # History
         serializable["_history"] = EVENT_HISTORY
@@ -659,14 +584,6 @@ def get_latest_user_event(guild_id: int, user_id: int):
         return None
     msg_id, ev = max(own, key=lambda x: x[1].get("event_time", datetime.min.replace(tzinfo=pytz.utc)))
     return msg_id, ev
-
-
-def can_edit_points(interaction: discord.Interaction) -> bool:
-    """Nur Owner oder Server-Admins/Manage_Guild dürfen Punkte verändern."""
-    if interaction.user.id == OWNER_ID:
-        return True
-    perms = interaction.user.guild_permissions
-    return perms.administrator or perms.manage_guild
 
 
 
@@ -2180,18 +2097,6 @@ async def stats_command(interaction: discord.Interaction):
     )
 
     # Punkte-Statistik
-    guild_points = POINTS.get(guild_id, {})
-    total_points_entries = len(guild_points)
-    if total_points_entries > 0:
-        avg_points = sum(guild_points.values()) / total_points_entries
-        embed.add_field(
-            name="🏅 Punkte-System",
-            value=(
-                f"• Spieler mit Punkten: **{total_points_entries}**\n"
-                f"• Durchschnittliche Punkte: **{avg_points:.1f}**"
-            ),
-            inline=False,
-        )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2600,7 +2505,7 @@ def run_bot():
 async def on_ready():
     print(f"✅ Discord online als {bot.user} | Guilds={len(bot.guilds)}")
     global TASKS_STARTED
-    print(f"✅ SlotBot v4.6 online als {bot.user} (instance={INSTANCE_ID})")
+    print(f"✅ SlotBot v4.6 online als {bot.user} (instance={globals().get('INSTANCE_ID', 'unknown')})")
     loaded = load_events_with_retry()
     active_events.clear()
     active_events.update(loaded)
@@ -2654,55 +2559,6 @@ async def on_error(event_method, *args, **kwargs):
     import traceback
     print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
     traceback.print_exc()
-
-
-
-    guild_id = interaction.guild.id
-    user_id = interaction.user.id
-    perms = interaction.user.guild_permissions
-    is_admin = perms.administrator or perms.manage_guild
-
-    items = []
-    for mid, ev in active_events.items():
-        if ev.get("guild_id") != guild_id:
-            continue
-        if not is_admin and int(ev.get("creator_id", 0)) != user_id:
-            continue
-
-        title = str(ev.get("title", "Event"))
-        if current and current.lower() not in title.lower():
-            continue
-
-        when = ""
-        try:
-            if ev.get("event_time"):
-                when = format_de_datetime(ev["event_time"].astimezone(BERLIN_TZ))
-        except Exception:
-            when = ""
-
-        ch_name = ""
-        try:
-            ch = interaction.guild.get_channel(ev.get("channel_id"))
-            ch_name = f" #{ch.name}" if ch else ""
-        except Exception:
-            ch_name = ""
-
-        label = f"{title} — {when}{ch_name}".strip()
-        if len(label) > 100:
-            label = label[:97] + "…"
-
-        items.append(app_commands.Choice(name=label, value=str(mid)))
-
-    def _key(choice):
-        try:
-            ev2 = active_events.get(int(choice.value))
-            t = ev2.get("event_time")
-            return t or datetime.max.replace(tzinfo=pytz.utc)
-        except Exception:
-            return datetime.max.replace(tzinfo=pytz.utc)
-
-    items.sort(key=_key)
-    return items[:25]
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
