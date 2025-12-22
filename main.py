@@ -59,6 +59,10 @@ import random
 
 import requests
 import pytz
+
+import logging
+discord.utils.setup_logging(level=logging.INFO)
+
 from urllib.parse import quote_plus
 
 import discord
@@ -2564,15 +2568,30 @@ def ics_file(message_id: int):
     )
 
 
+
+async def _discord_main():
+    # Watchdog: zeigt, ob der Bot wirklich ready wird
+    async def _ready_watchdog():
+        for secs in (15, 30, 60, 120):
+            await asyncio.sleep(secs)
+            if not bot.is_ready():
+                print(f"⚠️ Bot noch nicht ready nach {secs}s – prüfe Token/Intents/Discord-Ausfall…")
+            else:
+                return
+
+    asyncio.create_task(_ready_watchdog())
+    await bot.start(DISCORD_TOKEN)
+
 def run_bot():
     print("🤖 Starte Discord Bot…")
     try:
-        asyncio.run(bot.start(DISCORD_TOKEN))
+        asyncio.run(_discord_main())
     except Exception:
         import traceback
         print("❌ Discord Bot ist beim Start abgestürzt:")
         traceback.print_exc()
         raise
+
 
 
 @bot.event
