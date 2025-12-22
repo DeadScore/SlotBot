@@ -61,13 +61,15 @@ import requests
 import pytz
 
 import logging
-discord.utils.setup_logging(level=logging.INFO)
+
 
 from urllib.parse import quote_plus
 
 import discord
 from discord.ext import commands
 from discord import app_commands
+
+discord.utils.setup_logging(level=logging.INFO)
 from flask import Flask, Response
 
 # ----------------- Konfiguration -----------------
