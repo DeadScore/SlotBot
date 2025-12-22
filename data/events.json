@@ -22,58 +22,6 @@
         "delete_at": "2025-12-20T20:45:00+00:00",
         "art": "PvE"
     },
-    "1452358817403764918": {
-        "title": "Gear und EP",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 1,
-                "main": [
-                    373132834883371009
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 5,
-                "main": [
-                    404173735130562562,
-                    506116955862859818,
-                    508348086922510348,
-                    616690315667177484,
-                    770603455810895922
-                ],
-                "waitlist": [
-                    702183001781698692
-                ],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Gear und EP\n\ud83d\udccd **Ort:** W\u00fcste / Shardlingg\n\ud83d\udd52 **Datum/Zeit:** Montag, 22.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** ~~18+~~ \u2192 16+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-12-22T19:00:00+00:00",
-        "thread_id": 1452358817403764918,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-22T20:00:00+00:00",
-        "art": "PVX"
-    },
     "1452604807532515529": {
         "title": "EP farmen (Drops?)",
         "slots": {
