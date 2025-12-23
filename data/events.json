@@ -108,7 +108,9 @@
         "slots": {
             "\ud83c\udd99": {
                 "limit": 1,
-                "main": [],
+                "main": [
+                    404173735130562562
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
