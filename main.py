@@ -119,6 +119,7 @@ BACKGROUND_TASKS: Dict[str, asyncio.Task] = {}
 TASKS_STARTED = False
 
 
+COMMANDS_SYNCED = False
 # ----------------- Datum/Zeit Hilfen -----------------
 WEEKDAY_DE = {
     "Monday": "Montag",
@@ -941,9 +942,9 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "**Erstellt ein neues Event mit Slots & Thread.**\n"
             "Pflicht: `art`, `zweck`, `ort`, `datum`, `zeit`, `level`, `stil`, `slots`\n"
-            "Optional: `typ`, `gruppenlead`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
+            "Optional: `typ`, `gruppenlead`, `treffpunkt`, `anmerkung`, `auto_delete_stunden` (Default 1h)\n"
             "Beispiel:\n"
-            '`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" datum:heute zeit:20:00`\noder: `/event ... datum:morgen zeit:21`\noder klassisch: `/event ... datum:27.10.2025 zeit:20:00`\n'
+            '`/event art:PvE zweck:"XP Farmen" ort:"Calpheon" treffpunkt:"Vor dem Stall" datum:heute zeit:20:00`\noder: `/event ... datum:morgen zeit:21`\noder klassisch: `/event ... datum:27.10.2025 zeit:20:00`\n'
             '`level:61+ stil:"Organisiert" slots:"⚔️:3 🛡️:1 💉:2" auto_delete_stunden:3`\n'
             "• 20-Minuten-Reminder per DM\n"
             "• 10-Minuten-AFK-Check per DM (Auto-Kick bei Nicht-Reaktion)"
@@ -1347,6 +1348,7 @@ async def event(
     slots: str,
     typ: app_commands.Choice[str] = None,
     gruppenlead: str = None,
+    treffpunkt: str = None,
     anmerkung: str = None,
     auto_delete_stunden: app_commands.Range[int, 1, 168] = 1,
 ):
@@ -1394,6 +1396,7 @@ async def event(
         sep,
         f"🎯 **Zweck:** {zweck}",
         f"📍 **Ort:** {ort}",
+        *([f"📌 **Treffpunkt:** {treffpunkt}"] if treffpunkt else []),
         f"🕒 **Datum/Zeit:** {time_str_long}",
         f"⚔️ **Levelbereich:** {level}",
         f"💬 **Stil:** {stil.value}",
@@ -2444,6 +2447,11 @@ async def test_command(interaction: discord.Interaction):
 flask_app = Flask("bot_flask")
 
 
+
+def run_flask():
+    # Render erwartet, dass wir auf PORT binden (Healthchecks).
+    flask_app.run(host="0.0.0.0", port=port)
+
 @flask_app.route("/")
 def index():
     return "✅ SlotBot v4.6 läuft (Render kompatibel)."
@@ -2505,6 +2513,7 @@ def run_bot():
 async def on_ready():
     print(f"✅ Discord online als {bot.user} | Guilds={len(bot.guilds)}")
     global TASKS_STARTED
+
     print(f"✅ SlotBot v4.6 online als {bot.user} (instance={globals().get('INSTANCE_ID', 'unknown')})")
     loaded = load_events_with_retry()
     active_events.clear()
@@ -2547,27 +2556,11 @@ async def on_ready():
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot v4.6 + Flask ...")
-    active_events.update(load_events_with_retry())
-    port = int(os.environ.get("PORT", 5000))
-    # Bot in separatem Thread
-    Thread(target=run_bot, daemon=True).start()
-    flask_app.run(host="0.0.0.0", port=port)
 
+    # Flask im Hintergrund (für Render Healthcheck)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-@bot.event
-async def on_error(event_method, *args, **kwargs):
-    import traceback
-    print(f"❌ Unerwarteter Fehler in Event '{event_method}':")
-    traceback.print_exc()
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    print(f"❌ Slash-Command-Fehler: {error}")
-    try:
-        msg = "❌ Bei diesem Befehl ist ein Fehler aufgetreten. Bitte probiere es später erneut."
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except Exception:
-        pass
+    # Discord im Hauptthread (stabiler als Bot im Neben-Thread)
+    print("🤖 Starte Discord Bot…")
+    bot.run(DISCORD_TOKEN)
