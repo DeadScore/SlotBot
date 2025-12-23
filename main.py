@@ -716,11 +716,33 @@ async def afk_enforcer_task():
                 except Exception as e:
                     print(f"⚠️ update_event_message (AFK Enforcer) fehlgeschlagen: {e}")
 
-                # optional: Channel Info
+                # Info in den Event-Thread posten (Fallback: Channel)
                 try:
-                    ch = guild.get_channel(ev.get("channel_id"))
-                    if ch:
-                        await ch.send(f"🚪 <@{user_id}> wurde wegen AFK aus dem Event entfernt.")
+                    target = None
+
+                    thread_id = ev.get("thread_id")
+                    if thread_id:
+                        target = guild.get_thread(int(thread_id))
+                        if target is None:
+                            try:
+                                fetched = await bot.fetch_channel(int(thread_id))
+                                if isinstance(fetched, (discord.Thread, discord.TextChannel)):
+                                    target = fetched
+                            except Exception:
+                                target = None
+
+                    if target is None:
+                        ch_id = ev.get("channel_id")
+                        if ch_id:
+                            target = guild.get_channel(int(ch_id))
+                            if target is None:
+                                try:
+                                    target = await bot.fetch_channel(int(ch_id))
+                                except Exception:
+                                    target = None
+
+                    if target:
+                        await target.send(f"🚪 <@{user_id}> wurde wegen AFK aus dem Event entfernt.")
                 except Exception:
                     pass
 
