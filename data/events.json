@@ -126,6 +126,48 @@
         "delete_at": "2025-12-23T14:00:00+00:00",
         "art": "PVX"
     },
+    "1453000316286144576": {
+        "title": "EXP",
+        "slots": {
+            "<:Tank_Archetype:1345126746340458527>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Cleric_Archetype:1345126828280512683>": {
+                "limit": 2,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Bard_Archetype:1345126811880914944>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:DPS_Archetype:1422234733177208863>": {
+                "limit": 4,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** EXP\n\ud83d\udccd **Ort:** EXP\n\ud83d\udd52 **Datum/Zeit:** Dienstag, 23.12.2025 18:00 CET\n\u2694\ufe0f **Levelbereich:** 19+\n\ud83d\udcac **Stil:** Organisiert\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 770603455810895922,
+        "event_time": "2025-12-23T17:00:00+00:00",
+        "thread_id": 1453000316286144576,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-23T18:00:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -459,6 +501,14 @@
             "art": "PVX",
             "created_at": "2025-12-23T12:22:10.884516",
             "event_time": "2025-12-23T13:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 770603455810895922,
+            "title": "EXP",
+            "art": "PvE",
+            "created_at": "2025-12-23T12:24:35.104704",
+            "event_time": "2025-12-23T17:00:00+00:00"
         }
     ]
 }
