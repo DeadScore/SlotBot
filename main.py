@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, Any, List, Tuple
 import threading
+PORT = int(os.environ.get("PORT", "10000"))
+port = PORT
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
@@ -2451,7 +2453,7 @@ flask_app = Flask("bot_flask")
 
 def run_flask():
     # Render erwartet, dass wir auf PORT binden (Healthchecks).
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 @flask_app.route("/")
 def index():
