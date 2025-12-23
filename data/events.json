@@ -76,6 +76,48 @@
         "delete_at": "2025-12-23T12:30:00+00:00",
         "art": "PVX"
     },
+    "1452979488001622097": {
+        "title": "Ep & Gear",
+        "slots": {
+            "<:Tank_Archetype:1345126746340458527>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Cleric_Archetype:1345126828280512683>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:Bard_Archetype:1345126811880914944>": {
+                "limit": 1,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            },
+            "<:DPS_Archetype:1422234733177208863>": {
+                "limit": 5,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Ep & Gear\n\ud83d\udccd **Ort:** Steelbloom\n\ud83d\udd52 **Datum/Zeit:** Dienstag, 23.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** 18+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Gruppe\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 1027946186700771378,
+        "event_time": "2025-12-23T19:00:00+00:00",
+        "thread_id": 1452979488001622097,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-23T20:00:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -393,6 +435,14 @@
             "art": "PVX",
             "created_at": "2025-12-23T10:51:59.051170",
             "event_time": "2025-12-23T11:30:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 1027946186700771378,
+            "title": "Ep & Gear",
+            "art": "PvE",
+            "created_at": "2025-12-23T11:01:48.991772",
+            "event_time": "2025-12-23T19:00:00+00:00"
         }
     ]
 }
