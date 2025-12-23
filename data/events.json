@@ -107,59 +107,6 @@
         "delete_at": "2025-12-23T20:00:00+00:00",
         "art": "PvE"
     },
-    "1453000316286144576": {
-        "title": "EXP",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 2,
-                "main": [
-                    172978190296285184,
-                    617440482032615434
-                ],
-                "waitlist": [],
-                "reminded": [
-                    172978190296285184
-                ],
-                "afk_dm_sent": [
-                    172978190296285184
-                ]
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 4,
-                "main": [],
-                "waitlist": [],
-                "reminded": [
-                    770603455810895922
-                ],
-                "afk_dm_sent": [
-                    770603455810895922
-                ]
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** EXP\n\ud83d\udccd **Ort:** EXP\n\ud83d\udd52 **Datum/Zeit:** Dienstag, 23.12.2025 18:00 CET\n\u2694\ufe0f **Levelbereich:** 19+\n\ud83d\udcac **Stil:** Organisiert\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 770603455810895922,
-        "event_time": "2025-12-23T17:00:00+00:00",
-        "thread_id": 1453000316286144576,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-23T18:00:00+00:00",
-        "art": "PvE"
-    },
     "1453054803193102586": {
         "title": "Gear und EP",
         "slots": {
