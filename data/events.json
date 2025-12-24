@@ -108,6 +108,27 @@
         "delete_at": "2025-12-29T19:45:00+00:00",
         "art": "PVX"
     },
+    "1453513332140150904": {
+        "title": "Kistenlauf ins Land der Zwerge",
+        "slots": {
+            "\u2705": {
+                "limit": 20,
+                "main": [],
+                "waitlist": [],
+                "reminded": [],
+                "afk_dm_sent": []
+            }
+        },
+        "channel_id": 1318316138802712576,
+        "guild_id": 623245828403888140,
+        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Kistenlauf ins Land der Zwerge\n\ud83d\udccd **Ort:** Miraleth - Kal Talahon\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 25.12.2025 18:00 CET\n\u2694\ufe0f **Levelbereich:** 10+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        "creator_id": 373132834883371009,
+        "event_time": "2025-12-25T17:00:00+00:00",
+        "thread_id": 1453513332140150904,
+        "auto_delete_stunden": 1,
+        "delete_at": "2025-12-25T18:00:00+00:00",
+        "art": "PvE"
+    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -464,6 +485,14 @@
             "title": "Kistenlauf ins Land der Zwerge",
             "art": "PvE",
             "created_at": "2025-12-24T22:16:38.721934",
+            "event_time": "2025-12-25T17:00:00+00:00"
+        },
+        {
+            "guild_id": 623245828403888140,
+            "creator_id": 373132834883371009,
+            "title": "Kistenlauf ins Land der Zwerge",
+            "art": "PvE",
+            "created_at": "2025-12-24T22:23:05.195101",
             "event_time": "2025-12-25T17:00:00+00:00"
         }
     ]
