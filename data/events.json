@@ -4,9 +4,7 @@
         "slots": {
             "<:Tank_Archetype:1345126746340458527>": {
                 "limit": 1,
-                "main": [
-                    1294305436580843604
-                ],
+                "main": [],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
