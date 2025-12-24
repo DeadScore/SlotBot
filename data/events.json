@@ -77,7 +77,9 @@
             },
             "<:Bard_Archetype:1345126811880914944>": {
                 "limit": 1,
-                "main": [],
+                "main": [
+                    1294305436580843604
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
