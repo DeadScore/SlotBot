@@ -173,7 +173,9 @@
         "slots": {
             "\u2705": {
                 "limit": 10,
-                "main": [],
+                "main": [
+                    893474722921189386
+                ],
                 "waitlist": [],
                 "reminded": [],
                 "afk_dm_sent": []
