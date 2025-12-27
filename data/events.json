@@ -169,68 +169,6 @@
         "delete_at": "2025-12-28T20:00:00+00:00",
         "art": "PVX"
     },
-    "1454492629369618706": {
-        "title": "ExP farmen",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    254384437679226882
-                ],
-                "waitlist": [
-                    199502768552148992
-                ],
-                "reminded": [
-                    254384437679226882
-                ],
-                "afk_dm_sent": [
-                    254384437679226882
-                ]
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 2,
-                "main": [],
-                "waitlist": [],
-                "reminded": [
-                    572007362253160448
-                ],
-                "afk_dm_sent": [
-                    572007362253160448
-                ]
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 4,
-                "main": [
-                    405099592963719169
-                ],
-                "waitlist": [],
-                "reminded": [
-                    405099592963719169,
-                    718418102408314890
-                ],
-                "afk_dm_sent": [
-                    405099592963719169,
-                    718418102408314890
-                ]
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** ExP farmen\n\ud83d\udccd **Ort:** Ursine Cave\n\ud83d\udd52 **Datum/Zeit:** Samstag, 27.12.2025 20:00 CET\n\u2694\ufe0f **Levelbereich:** 14+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-12-27T19:00:00+00:00",
-        "thread_id": 1454492629369618706,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-27T20:00:00+00:00",
-        "art": "PVX"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
