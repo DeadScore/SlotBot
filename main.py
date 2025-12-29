@@ -233,45 +233,73 @@ SLOT_LABELS = {
     "💉": "Heiler",
 }
 
-CUSTOM_EMOJI_RE = re.compile(r"^<a?:[A-Za-z0-9_]+:\d{15,21}>$")
 
-def _parse_slots_spec(spec: str) -> Optional[Dict[str, dict]]:
+CUSTOM_EMOJI_RE = re.compile(r"^<a?:[A-Za-z0-9_]+:\d{15,21}>$")
+COLON_NAME_RE = re.compile(r"^:[A-Za-z0-9_]{1,64}:$")
+
+# Match one slot spec anywhere in the string, allowing spaces around ":" and supporting:
+# - unicode emoji (e.g. ⚔️)
+# - custom emoji <:Name:123...> or <a:Name:123...>
+# - colon-name :tank: (will be resolved to a guild emoji by name if possible)
+SLOT_SPEC_RE = re.compile(
+    r"(?P<emo><a?:[A-Za-z0-9_]+:\d{15,21}>|:[A-Za-z0-9_]{1,64}:|[^\s]+?)\s*:\s*(?P<num>\d{1,2})"
+)
+
+def _resolve_colon_name_to_guild_emoji(emo: str, guild: Optional[discord.Guild]) -> Optional[str]:
+    if not guild:
+        return None
+    name = emo.strip(":")
+    for e in guild.emojis:
+        if e.name == name:
+            return str(e)
+    return None
+
+def _parse_slots_spec(spec: str, guild: Optional[discord.Guild]) -> Optional[Dict[str, dict]]:
     if not spec:
         return None
     s = spec.strip()
     if not s:
         return None
 
-    parts = re.split(r"\s+", s)
     slots: Dict[str, dict] = {}
-    for p in parts:
-        if not p:
-            continue
-        if ":" not in p:
+    consumed = 0
+
+    for m in SLOT_SPEC_RE.finditer(s):
+        between = s[consumed:m.start()]
+        if between.strip():
             return None
-        emo, lim = p.split(":", 1)
-        emo = emo.strip()
-        lim = lim.strip()
-        if not emo or not lim.isdigit():
-            return None
-        limit = int(lim)
-        if limit < 0 or limit > 99:
+        consumed = m.end()
+
+        emo = m.group("emo").strip()
+        num = int(m.group("num"))
+
+        if num < 0 or num > 99:
             return None
 
-        # Emoji plausibility: unicode emoji OR custom emoji format
-        if len(emo) > 64:
-            return None
-        if not (CUSTOM_EMOJI_RE.match(emo) or any(ch for ch in emo)):
+        # Resolve :name: to actual guild emoji if available
+        if COLON_NAME_RE.match(emo):
+            resolved = _resolve_colon_name_to_guild_emoji(emo, guild)
+            if resolved:
+                emo = resolved
+            else:
+                # Discord does NOT accept :name: as a reaction emoji. Reject clearly.
+                return None
+
+        if not (CUSTOM_EMOJI_RE.match(emo) or len(emo) <= 64):
             return None
 
         label = SLOT_LABELS.get(emo, "Slot")
-        slots[emo] = {"label": label, "limit": limit, "main": [], "waitlist": []}
+        slots[emo] = {"label": label, "limit": num, "main": [], "waitlist": []}
+
+    if s[consumed:].strip():
+        return None
 
     if not slots:
         return None
     return slots
 
 def _default_slots_dict() -> Dict[str, dict]:
+
     slots = {}
     for emoji, label, limit in DEFAULT_SLOTS:
         slots[emoji] = {"label": label, "limit": limit, "main": [], "waitlist": []}
@@ -477,7 +505,7 @@ async def _event_autocomplete(interaction: discord.Interaction, current: str) ->
     treffpunkt="Optional: Treffpunkt",
     anmerkung="Optional: Zusatzinfo",
     auto_delete="Optional: Auto-Löschen deaktivieren (off)",
-    slots="Optional: Slots z.B. ⚔️:3 🛡️:1 💉:2",
+    slots="Slots (Pflicht): z.B. ⚔️:3 🛡️:1 💉:2 oder :tank: : 1",
 )
 @app_commands.choices(art=ART_CHOICES)
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
@@ -488,9 +516,9 @@ async def event_create(
     ort: str,
     datum: str,
     zeit: str,
+    slots: str,
     gruppenlead: Optional[str] = None,
     treffpunkt: Optional[str] = None,
-    slots: Optional[str] = None,
     auto_delete: Optional[str] = None,
     anmerkung: Optional[str] = None,
 ):
@@ -524,11 +552,11 @@ async def event_create(
 
 
     # Build slots (default oder frei definierbar via `slots` Parameter)
-    slots_dict = _parse_slots_spec(slots) if slots else None
-    if slots and not slots_dict:
-        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: `⚔️:3 🛡️:1 💉:2`", ephemeral=True)
+    slots_dict = _parse_slots_spec(slots, interaction.guild)
+    if not slots_dict:
+        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
-    slots = slots_dict or _default_slots_dict()
+    slots = slots_dict
     ev = {
         "guild_id": interaction.guild.id,
         "channel_id": interaction.channel.id,
@@ -807,8 +835,8 @@ async def help_cmd(interaction: discord.Interaction):
 # -------------------- Roll Commands --------------------
 
 @bot.tree.command(name="start_roll", description="Startet einen Roll (Teilnahme via /roll). Nur ein Roll pro Channel.")
-@app_commands.describe(dauer="Dauer in Minuten (z.B. 5)")
-async def start_roll(interaction: discord.Interaction, dauer: int):
+@app_commands.describe(dauer="Dauer in Minuten (z.B. 5)", grund="Optional: Preis/Grund")
+async def start_roll(interaction: discord.Interaction, dauer: int, grund: Optional[str] = None):
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
         return
@@ -828,11 +856,15 @@ async def start_roll(interaction: discord.Interaction, dauer: int):
         "guild_id": interaction.guild.id,
         "channel_id": ch_id,
         "ends_at": ends_at.isoformat(),
-        "participants": [],
+        "rolls": {},
     }
-    await interaction.response.send_message(f"🎲 Roll gestartet! Teilnahme mit **/roll**. Ende in **{dauer} Min**.", ephemeral=False)
+    msg = f"🎲 Roll gestartet! Teilnahme mit **/roll**. Ende in **{dauer} Min**."
+    if grund and grund.strip():
+        msg += f"\n🏷️ **Preis/Grund:** {grund.strip()}"
+    await interaction.response.send_message(msg, ephemeral=False)
 
-@bot.tree.command(name="roll", description="Nimmt am aktuellen Roll teil (nur 1x).")
+
+@bot.tree.command(name="roll", description="Würfelt im aktuellen Roll (nur 1x). Zeigt Zahl öffentlich.")
 async def roll(interaction: discord.Interaction):
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
@@ -843,7 +875,6 @@ async def roll(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Aktuell läuft hier kein Roll.", ephemeral=True)
         return
 
-    # check expiry
     try:
         ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
     except Exception:
@@ -852,15 +883,19 @@ async def roll(interaction: discord.Interaction):
         await interaction.response.send_message("⏱️ Roll ist schon abgelaufen.", ephemeral=True)
         return
 
-    parts = set(int(x) for x in st.get("participants", []))
-    if interaction.user.id in parts:
-        await interaction.response.send_message("❌ Du hast schon teilgenommen.", ephemeral=True)
+    rolls = st.get("rolls") or {}
+    uid = interaction.user.id
+    if str(uid) in rolls:
+        await interaction.response.send_message("❌ Du hast schon gewürfelt.", ephemeral=True)
         return
 
-    parts.add(interaction.user.id)
-    st["participants"] = list(parts)
+    import random
+    value = random.randint(1, 100)
+    rolls[str(uid)] = int(value)
+    st["rolls"] = rolls
     active_rolls[ch_id] = st
-    await interaction.response.send_message("✅ Du bist dabei!", ephemeral=True)
+
+    await interaction.response.send_message(f"🎲 <@{uid}> würfelt **{value}**!", ephemeral=False)
 
 @bot.tree.command(name="stop_roll", description="Stoppt den aktuellen Roll und zieht einen Gewinner.")
 async def stop_roll(interaction: discord.Interaction):
@@ -879,65 +914,97 @@ async def stop_roll(interaction: discord.Interaction):
             await interaction.response.send_message("❌ Nur der Starter oder ein Admin kann stoppen.", ephemeral=True)
             return
 
-    participants = list(set(int(x) for x in st.get("participants", [])))
+    rolls = st.get("rolls") or {}
+    norm = {}
+    for k, v in rolls.items():
+        try:
+            norm[int(k)] = int(v)
+        except Exception:
+            pass
+
     st["active"] = False
     active_rolls[ch_id] = st
 
-    if not participants:
+    if not norm:
         await interaction.response.send_message("🫠 Roll beendet – niemand hat teilgenommen.", ephemeral=False)
         return
 
+    max_val = max(norm.values())
+    top = [uid for uid, val in norm.items() if val == max_val]
+
     import random
-    winner = random.choice(participants)
-    await interaction.response.send_message(f"🏆 Gewinner: <@{winner}> 🎉", ephemeral=False)
+    winner = random.choice(top)
+
+    sorted_items = sorted(norm.items(), key=lambda kv: kv[1], reverse=True)
+    lines = [f"• <@{uid}>: **{val}**" for uid, val in sorted_items[:20]]
+
+    await interaction.response.send_message("🏁 **Roll beendet!**\\n" + "\\n".join(lines), ephemeral=False)
+    await interaction.followup.send(f"🏆 Gewinner: <@{winner}> 🎉 (mit **{max_val}**)")
 
 async def roll_watcher_task():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = _now_utc()
-        for ch_id, st in list(active_rolls.items()):
-            if not st.get("active"):
-                continue
-            try:
-                ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
-            except Exception:
-                continue
-            if now < ends_at:
-                continue
 
-            # auto-finish
-            guild = bot.get_guild(int(st.get("guild_id")))
-            if not guild:
-                st["active"] = False
-                active_rolls[ch_id] = st
-                continue
-            try:
-                ch = guild.get_channel(int(st.get("channel_id"))) or await bot.fetch_channel(int(st.get("channel_id")))
-            except Exception:
-                st["active"] = False
-                active_rolls[ch_id] = st
-                continue
-
-            participants = list(set(int(x) for x in st.get("participants", [])))
-            st["active"] = False
-            active_rolls[ch_id] = st
-
-            if not participants:
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            now = _now_utc()
+            for ch_id, st in list(active_rolls.items()):
+                if not st.get("active"):
+                    continue
                 try:
-                    await ch.send("🫠 Roll beendet – niemand hat teilgenommen.")
+                    ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
+                except Exception:
+                    continue
+                if now < ends_at:
+                    continue
+
+                guild = bot.get_guild(int(st.get("guild_id")))
+                if not guild:
+                    st["active"] = False
+                    active_rolls[ch_id] = st
+                    continue
+                try:
+                    ch = guild.get_channel(int(st.get("channel_id"))) or await bot.fetch_channel(int(st.get("channel_id")))
+                except Exception:
+                    st["active"] = False
+                    active_rolls[ch_id] = st
+                    continue
+
+                rolls = st.get("rolls") or {}
+                norm = {}
+                for k, v in rolls.items():
+                    try:
+                        norm[int(k)] = int(v)
+                    except Exception:
+                        pass
+
+                st["active"] = False
+                active_rolls[ch_id] = st
+
+                if not norm:
+                    try:
+                        await ch.send("🫠 Roll beendet – niemand hat teilgenommen.")
+                    except Exception:
+                        pass
+                    continue
+
+                max_val = max(norm.values())
+                top = [uid for uid, val in norm.items() if val == max_val]
+
+                import random
+                winner = random.choice(top)
+
+                sorted_items = sorted(norm.items(), key=lambda kv: kv[1], reverse=True)
+                lines = [f"• <@{uid}>: **{val}**" for uid, val in sorted_items[:20]]
+
+                try:
+                    await ch.send("🏁 **Roll beendet!**\n" + "\n".join(lines))
                 except Exception:
                     pass
-                continue
+                try:
+                    await ch.send(f"🏆 Gewinner: <@{winner}> 🎉 (mit **{max_val}**)")
+                except Exception:
+                    pass
 
-            import random
-            winner = random.choice(participants)
-            try:
-                await ch.send(f"🏆 Gewinner: <@{winner}> 🎉")
-            except Exception:
-                pass
-
-        await asyncio.sleep(5)
-
+            await asyncio.sleep(2)
 @bot.tree.command(name="test", description="Testet ob der Bot läuft (zeigt Basis-Status).")
 async def test_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Bot läuft. Slash-Commands sind aktiv.", ephemeral=True)
@@ -1032,7 +1099,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 # -------------------- Background tasks --------------------
 
-BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"reminder": None, "afk": None, "cleanup": None}
+BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"reminder": None, "afk": None, "cleanup": None, "roll_watcher": None}
 TASKS_STARTED = False
 
 async def reminder_task():
@@ -1243,6 +1310,7 @@ async def on_ready():
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
         BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
+        BACKGROUND_TASKS["roll_watcher"] = bot.loop.create_task(roll_watcher_task(), name="slotbot_roll_watcher")
         TASKS_STARTED = True
 
 # -------------------- Main --------------------
