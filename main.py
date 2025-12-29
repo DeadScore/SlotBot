@@ -238,6 +238,27 @@ SLOT_LABELS = {
 }
 
 
+def _normalize_emoji(s: str) -> str:
+    """Normalize unicode emoji so ⚔ and ⚔️ match. Custom emojis stay unchanged."""
+    if not s:
+        return s
+    # keep custom emoji format as-is
+    if CUSTOM_EMOJI_RE.match(s) if "CUSTOM_EMOJI_RE" in globals() else False:
+        return s
+    # strip common variation selectors / joiners for matching
+    return s.replace("\ufe0f", "").replace("\u200d", "")
+
+def _find_slot_key(ev: dict, emoji: str) -> Optional[str]:
+    slots = ev.get("slots", {})
+    if emoji in slots:
+        return emoji
+    ne = _normalize_emoji(emoji)
+    for k in slots.keys():
+        if _normalize_emoji(str(k)) == ne:
+            return k
+    return None
+
+
 CUSTOM_EMOJI_RE = re.compile(r"^<a?:[A-Za-z0-9_]+:\d{15,21}>$")
 COLON_NAME_RE = re.compile(r"^:[A-Za-z0-9_]{1,64}:$")
 
@@ -528,6 +549,13 @@ async def _event_autocomplete(interaction: discord.Interaction, current: str) ->
     auto_delete="Optional: Auto-Löschen deaktivieren (off)",
     slots="Slots (Pflicht): z.B. ⚔️:3 🛡️:1 💉:2 oder :tank: : 1",
 )
+
+
+
+async def _event_delete_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+    # identisch zu edit: User sieht nur eigene Events, Admins alle
+    return await _event_autocomplete(interaction, current)
+
 @app_commands.choices(art=ART_CHOICES)
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
 async def event_create(
@@ -1089,8 +1117,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     active_events[_event_key(payload.message_id)] = ev
     await safe_save()
-    await update_event_post(guild, payload.message_id)
-
+    try:
+        await update_event_post(guild, payload.message_id)
+    except Exception as e:
+        print(f"❌ update_event_post failed: {e}")
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
