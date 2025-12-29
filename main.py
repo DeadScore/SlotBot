@@ -227,6 +227,10 @@ DEFAULT_SLOTS = [
 
 # Slot-Parsing: erlaubt wie früher eine freie Slot-Definition, z.B.
 # `⚔️:3 🛡️:1 💉:2` oder `<:Tank:123456789012345678>:1`
+
+def _mention_user(user_id: int) -> str:
+    return f"<@{int(user_id)}>"
+
 SLOT_LABELS = {
     "⚔️": "DPS",
     "🛡️": "Tank",
@@ -603,7 +607,7 @@ async def event_create(
     await safe_save()
 
     if th:
-        await th.send("🧵 Thread für AFK-Check / Updates.")
+        await th.send("🧵 Thread für Updates.")
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -1035,6 +1039,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             ev["afk_state"] = st
             active_events[_event_key(int(event_msg_id))] = ev
             await safe_save()
+            try:
+                user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+                if user:
+                    await user.send("✅ Bestätigt! Du bist für das Event eingeplant.")
+            except Exception:
+                pass
         return
 
     # ---- Guild slot handling ----
