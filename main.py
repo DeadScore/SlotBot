@@ -209,6 +209,12 @@ def _event_key(message_id: int) -> str:
 active_events: Dict[str, dict] = load_events()
 print(f"✅ {len(active_events)} gespeicherte Events geladen.")
 
+# Rolls: pro Channel nur ein Roll gleichzeitig; pro Nutzer nur eine Teilnahme
+active_rolls: Dict[int, dict] = {}
+
+# AFK DM Prompts: message_id -> (event_message_id, user_id)
+afkdmprompts: Dict[int, Tuple[int, int]] = {}
+
 # -------------------- Slot handling --------------------
 
 DEFAULT_SLOTS = [
@@ -792,9 +798,149 @@ async def help_cmd(interaction: discord.Interaction):
         "• `/event_afk on|off` – AFK-Check pro Event an/aus\n"
         "• `/event_reset_notifications` – Reminder-Flags zurücksetzen\n\n"
         f"Reminder: **{REMINDER_MIN_BEFORE} min** vorher (DM, einmalig)\n"
-        f"AFK: Start **{AFK_START_MIN_BEFORE} min** vorher, Dauer **{AFK_DURATION_MIN} min**, Ping alle **{AFK_INTERVAL_MIN} min** (im Thread)\n"
+        f"AFK: Start **{AFK_START_MIN_BEFORE} min** vorher, Dauer **{AFK_DURATION_MIN} min**, Ping alle **{AFK_INTERVAL_MIN} min** (per PN/DM)\n"
     )
     await interaction.response.send_message(txt, ephemeral=True)
+
+
+
+# -------------------- Roll Commands --------------------
+
+@bot.tree.command(name="start_roll", description="Startet einen Roll (Teilnahme via /roll). Nur ein Roll pro Channel.")
+@app_commands.describe(dauer="Dauer in Minuten (z.B. 5)")
+async def start_roll(interaction: discord.Interaction, dauer: int):
+    if interaction.guild is None or interaction.channel is None:
+        await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
+        return
+    if dauer <= 0 or dauer > 180:
+        await interaction.response.send_message("❌ Dauer muss zwischen 1 und 180 Minuten liegen.", ephemeral=True)
+        return
+
+    ch_id = interaction.channel.id
+    if ch_id in active_rolls and active_rolls[ch_id].get("active"):
+        await interaction.response.send_message("❌ In diesem Channel läuft schon ein Roll.", ephemeral=True)
+        return
+
+    ends_at = _now_utc() + timedelta(minutes=dauer)
+    active_rolls[ch_id] = {
+        "active": True,
+        "owner_id": interaction.user.id,
+        "guild_id": interaction.guild.id,
+        "channel_id": ch_id,
+        "ends_at": ends_at.isoformat(),
+        "participants": [],
+    }
+    await interaction.response.send_message(f"🎲 Roll gestartet! Teilnahme mit **/roll**. Ende in **{dauer} Min**.", ephemeral=False)
+
+@bot.tree.command(name="roll", description="Nimmt am aktuellen Roll teil (nur 1x).")
+async def roll(interaction: discord.Interaction):
+    if interaction.guild is None or interaction.channel is None:
+        await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
+        return
+    ch_id = interaction.channel.id
+    st = active_rolls.get(ch_id)
+    if not st or not st.get("active"):
+        await interaction.response.send_message("❌ Aktuell läuft hier kein Roll.", ephemeral=True)
+        return
+
+    # check expiry
+    try:
+        ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
+    except Exception:
+        ends_at = _now_utc()
+    if _now_utc() >= ends_at:
+        await interaction.response.send_message("⏱️ Roll ist schon abgelaufen.", ephemeral=True)
+        return
+
+    parts = set(int(x) for x in st.get("participants", []))
+    if interaction.user.id in parts:
+        await interaction.response.send_message("❌ Du hast schon teilgenommen.", ephemeral=True)
+        return
+
+    parts.add(interaction.user.id)
+    st["participants"] = list(parts)
+    active_rolls[ch_id] = st
+    await interaction.response.send_message("✅ Du bist dabei!", ephemeral=True)
+
+@bot.tree.command(name="stop_roll", description="Stoppt den aktuellen Roll und zieht einen Gewinner.")
+async def stop_roll(interaction: discord.Interaction):
+    if interaction.guild is None or interaction.channel is None:
+        await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
+        return
+    ch_id = interaction.channel.id
+    st = active_rolls.get(ch_id)
+    if not st or not st.get("active"):
+        await interaction.response.send_message("❌ Hier läuft kein Roll.", ephemeral=True)
+        return
+
+    # only starter or admin can stop
+    if st.get("owner_id") != interaction.user.id:
+        if isinstance(interaction.user, discord.Member) and not is_admin(interaction.user):
+            await interaction.response.send_message("❌ Nur der Starter oder ein Admin kann stoppen.", ephemeral=True)
+            return
+
+    participants = list(set(int(x) for x in st.get("participants", [])))
+    st["active"] = False
+    active_rolls[ch_id] = st
+
+    if not participants:
+        await interaction.response.send_message("🫠 Roll beendet – niemand hat teilgenommen.", ephemeral=False)
+        return
+
+    import random
+    winner = random.choice(participants)
+    await interaction.response.send_message(f"🏆 Gewinner: <@{winner}> 🎉", ephemeral=False)
+
+async def roll_watcher_task():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = _now_utc()
+        for ch_id, st in list(active_rolls.items()):
+            if not st.get("active"):
+                continue
+            try:
+                ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
+            except Exception:
+                continue
+            if now < ends_at:
+                continue
+
+            # auto-finish
+            guild = bot.get_guild(int(st.get("guild_id")))
+            if not guild:
+                st["active"] = False
+                active_rolls[ch_id] = st
+                continue
+            try:
+                ch = guild.get_channel(int(st.get("channel_id"))) or await bot.fetch_channel(int(st.get("channel_id")))
+            except Exception:
+                st["active"] = False
+                active_rolls[ch_id] = st
+                continue
+
+            participants = list(set(int(x) for x in st.get("participants", [])))
+            st["active"] = False
+            active_rolls[ch_id] = st
+
+            if not participants:
+                try:
+                    await ch.send("🫠 Roll beendet – niemand hat teilgenommen.")
+                except Exception:
+                    pass
+                continue
+
+            import random
+            winner = random.choice(participants)
+            try:
+                await ch.send(f"🏆 Gewinner: <@{winner}> 🎉")
+            except Exception:
+                pass
+
+        await asyncio.sleep(5)
+
+@bot.tree.command(name="test", description="Testet ob der Bot läuft (zeigt Basis-Status).")
+async def test_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Bot läuft. Slash-Commands sind aktiv.", ephemeral=True)
 
 # -------------------- Reactions --------------------
 
@@ -802,32 +948,38 @@ async def help_cmd(interaction: discord.Interaction):
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
         return
+
+    emoji = str(payload.emoji)
+
+    # ---- AFK DM confirmation ----
     if payload.guild_id is None:
+        # user reacted in a DM channel
+        if emoji == "✅" and payload.message_id in afkdmprompts:
+            event_msg_id, target_user_id = afkdmprompts.get(payload.message_id, (None, None))
+            if target_user_id != payload.user_id or event_msg_id is None:
+                return
+            ev = active_events.get(_event_key(int(event_msg_id)))
+            if not ev:
+                return
+            st = ev.setdefault("afk_state", {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None})
+            confirmed = set(int(x) for x in st.get("confirmed", []))
+            confirmed.add(payload.user_id)
+            st["confirmed"] = list(confirmed)
+            ev["afk_state"] = st
+            active_events[_event_key(int(event_msg_id))] = ev
+            await safe_save()
         return
+
+    # ---- Guild slot handling ----
     ev = active_events.get(_event_key(payload.message_id))
     if not ev:
         return
+
     guild = bot.get_guild(payload.guild_id)
     if not guild:
         return
 
-    emoji = str(payload.emoji)
     user_id = payload.user_id
-
-    # AFK confirmation (✅ on AFK messages)
-    try:
-        st = ev.get("afk_state") or {}
-        prompt_ids = set(int(x) for x in st.get("prompt_ids", []))
-        if emoji == "✅" and payload.message_id in prompt_ids:
-            confirmed = set(int(x) for x in st.get("confirmed", []))
-            confirmed.add(user_id)
-            st["confirmed"] = list(confirmed)
-            ev["afk_state"] = st
-            active_events[_event_key(payload.message_id)] = ev
-            await safe_save()
-            return
-    except Exception:
-        pass
 
     # Slot selection
     status, _ = _slot_add_user(ev, emoji, user_id)
@@ -844,6 +996,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     active_events[_event_key(payload.message_id)] = ev
     await safe_save()
     await update_event_post(guild, payload.message_id)
+
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
@@ -916,7 +1069,12 @@ async def reminder_task():
             await safe_save()
         await asyncio.sleep(60)
 
+
 async def afk_task():
+    """AFK-Check per PN (DM): startet 30 Min vorher, läuft 20 Min, pingt alle 5 Min.
+    Bestätigung per ✅ Reaktion auf die DM. Wer bestätigt hat, wird nicht mehr gepingt.
+    Nach Ablauf: Slots von Nicht-Bestätigten werden freigegeben + WL rückt nach.
+    """
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = _now_utc()
@@ -934,7 +1092,10 @@ async def afk_task():
             window_end = window_start + timedelta(minutes=AFK_DURATION_MIN)
             interval = timedelta(minutes=AFK_INTERVAL_MIN)
 
-            st = ev.setdefault("afk_state", {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None})
+            st = ev.setdefault(
+                "afk_state",
+                {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None},
+            )
             if st.get("finished"):
                 continue
             if now < window_start:
@@ -944,12 +1105,6 @@ async def afk_task():
             if not guild:
                 continue
 
-            msg = await fetch_message(guild, int(ev["channel_id"]), int(mid_s))
-            if not msg:
-                continue
-            thread = await get_or_create_thread(msg, ev)
-            target = thread or msg.channel
-
             confirmed = set(int(x) for x in st.get("confirmed", []))
             participants = _slot_all_mains(ev)
             unanswered = participants - confirmed
@@ -958,8 +1113,8 @@ async def afk_task():
                 st["started"] = True
                 st["last_prompt_at"] = None
 
+            # Ende des Fensters: freigeben
             if now >= window_end:
-                # auto-release unanswered
                 removed = set()
                 if unanswered:
                     for uid in list(unanswered):
@@ -968,17 +1123,24 @@ async def afk_task():
                     _slot_promote_waitlist(ev)
                     active_events[mid_s] = ev
                     await safe_save()
-                    await update_event_post(guild, int(mid_s))
+                    try:
+                        await update_event_post(guild, int(mid_s))
+                    except Exception:
+                        pass
+
                 st["finished"] = True
                 st["confirmed"] = list(confirmed)
                 ev["afk_state"] = st
                 active_events[mid_s] = ev
                 await safe_save()
+
+                # kurze Info in Channel
                 try:
+                    ch = guild.get_channel(int(ev["channel_id"])) or await bot.fetch_channel(int(ev["channel_id"]))
                     if removed:
-                        await target.send(f"🚪 AFK-Check vorbei: **{len(removed)}** Slot(s) wurden automatisch freigegeben.")
+                        await ch.send(f"🚪 AFK-Check vorbei für **{ev.get('title','(Event)')}**: **{len(removed)}** Slot(s) freigegeben.")
                     else:
-                        await target.send("✅ AFK-Check vorbei: alle bestätigt.")
+                        await ch.send(f"✅ AFK-Check vorbei für **{ev.get('title','(Event)')}**: alle bestätigt.")
                 except Exception:
                     pass
                 continue
@@ -992,28 +1154,29 @@ async def afk_task():
                     last_dt = None
 
             if unanswered and (last_dt is None or now - last_dt >= interval):
-                mentions = " ".join(f"<@{uid}>" for uid in list(unanswered)[:30])
-                text = "🕵️ **AFK-Check:** Bitte mit ✅ reagieren, wenn du dabei bist."
-                if mentions:
-                    text += "\n" + mentions
-                try:
-                    m = await target.send(text)
+                for uid in list(unanswered):
                     try:
-                        await m.add_reaction("✅")
+                        member = guild.get_member(uid) or await guild.fetch_member(uid)
+                        dm = await member.create_dm()
+                        dm_msg = await dm.send(
+                            f"🕵️ **AFK-Check** für **{ev.get('title','(Event)')}**\n"
+                            f"Start: **{format_dt_local(dt_utc)}**\n"
+                            f"Bitte reagiere mit ✅, wenn du dabei bist."
+                        )
+                        try:
+                            await dm_msg.add_reaction("✅")
+                        except Exception:
+                            pass
+                        afkdmprompts[int(dm_msg.id)] = (int(mid_s), int(uid))
                     except Exception:
                         pass
-                    st["prompt_ids"].append(int(m.id))
-                    st["last_prompt_at"] = now.isoformat()
-                    ev["afk_state"] = st
-                    active_events[mid_s] = ev
-                    await safe_save()
-                except Exception:
-                    pass
+
+                st["last_prompt_at"] = now.isoformat()
+                ev["afk_state"] = st
+                active_events[mid_s] = ev
+                await safe_save()
 
         await asyncio.sleep(10)
-
-# -------------------- Ready / Sync --------------------
-
 
 
 async def cleanup_task():
