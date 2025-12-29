@@ -44,6 +44,8 @@ AFK_INTERVAL_MIN = 5
 
 REMINDER_MIN_BEFORE = 60
 
+AUTO_DELETE_HOURS_DEFAULT = 2  # Event wird standardmäßig 2h nach Start gelöscht
+
 # -------------------- Flask (Render healthcheck) --------------------
 
 flask_app = Flask("slotbot")
@@ -215,6 +217,59 @@ DEFAULT_SLOTS = [
     ("💉", "Heiler", 2),
 ]
 
+
+
+# Slot-Parsing: erlaubt wie früher eine freie Slot-Definition, z.B.
+# `⚔️:3 🛡️:1 💉:2` oder `<:Tank:123456789012345678>:1`
+SLOT_LABELS = {
+    "⚔️": "DPS",
+    "🛡️": "Tank",
+    "💉": "Heiler",
+}
+
+CUSTOM_EMOJI_RE = re.compile(r"^<a?:[A-Za-z0-9_]+:\d{15,21}>$")
+
+def _parse_slots_spec(spec: str) -> Optional[Dict[str, dict]]:
+    if not spec:
+        return None
+    s = spec.strip()
+    if not s:
+        return None
+
+    parts = re.split(r"\s+", s)
+    slots: Dict[str, dict] = {}
+    for p in parts:
+        if not p:
+            continue
+        if ":" not in p:
+            return None
+        emo, lim = p.split(":", 1)
+        emo = emo.strip()
+        lim = lim.strip()
+        if not emo or not lim.isdigit():
+            return None
+        limit = int(lim)
+        if limit < 0 or limit > 99:
+            return None
+
+        # Emoji plausibility: unicode emoji OR custom emoji format
+        if len(emo) > 64:
+            return None
+        if not (CUSTOM_EMOJI_RE.match(emo) or any(ch for ch in emo)):
+            return None
+
+        label = SLOT_LABELS.get(emo, "Slot")
+        slots[emo] = {"label": label, "limit": limit, "main": [], "waitlist": []}
+
+    if not slots:
+        return None
+    return slots
+
+def _default_slots_dict() -> Dict[str, dict]:
+    slots = {}
+    for emoji, label, limit in DEFAULT_SLOTS:
+        slots[emoji] = {"label": label, "limit": limit, "main": [], "waitlist": []}
+    return slots
 def build_event_header(ev: dict) -> str:
     lines = []
     lines.append(f"📣 **Event:** {ev['title']}")
@@ -415,6 +470,8 @@ async def _event_autocomplete(interaction: discord.Interaction, current: str) ->
     gruppenlead="Optional: Wer leitet?",
     treffpunkt="Optional: Treffpunkt",
     anmerkung="Optional: Zusatzinfo",
+    auto_delete="Optional: Auto-Löschen deaktivieren (off)",
+    slots="Optional: Slots z.B. ⚔️:3 🛡️:1 💉:2",
 )
 @app_commands.choices(art=ART_CHOICES)
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
@@ -427,6 +484,8 @@ async def event_create(
     zeit: str,
     gruppenlead: Optional[str] = None,
     treffpunkt: Optional[str] = None,
+    slots: Optional[str] = None,
+    auto_delete: Optional[str] = None,
     anmerkung: Optional[str] = None,
 ):
     if interaction.guild is None or interaction.channel is None:
@@ -446,12 +505,24 @@ async def event_create(
     dt_utc = _ensure_utc(dt_local.astimezone(pytz.utc))
 
     title = _build_event_title(art.value, zweck)
+    # Auto-Delete: standard 2h nach Start; optional ausschaltbar mit auto_delete=off
+    auto_delete_hours = AUTO_DELETE_HOURS_DEFAULT
+    if auto_delete is not None and auto_delete.strip() != "":
+        if auto_delete.strip().lower() != "off":
+            await interaction.response.send_message(
+                "❌ auto_delete akzeptiert nur `off` (oder leer lassen).",
+                ephemeral=True,
+            )
+            return
+        auto_delete_hours = None
 
-    # Build slots
-    slots = {}
-    for emoji, label, limit in DEFAULT_SLOTS:
-        slots[emoji] = {"label": label, "limit": limit, "main": [], "waitlist": []}
 
+    # Build slots (default oder frei definierbar via `slots` Parameter)
+    slots_dict = _parse_slots_spec(slots) if slots else None
+    if slots and not slots_dict:
+        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: `⚔️:3 🛡️:1 💉:2`", ephemeral=True)
+        return
+    slots = slots_dict or _default_slots_dict()
     ev = {
         "guild_id": interaction.guild.id,
         "channel_id": interaction.channel.id,
@@ -467,6 +538,7 @@ async def event_create(
         "event_time_utc": dt_utc.isoformat(),
         # flags/state
         "reminder60_sent": [],
+        "auto_delete_hours": auto_delete_hours,
         "afk_enabled": True,
         "afk_state": {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None},
     }
@@ -807,7 +879,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 # -------------------- Background tasks --------------------
 
-BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"reminder": None, "afk": None}
+BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"reminder": None, "afk": None, "cleanup": None}
 TASKS_STARTED = False
 
 async def reminder_task():
@@ -942,6 +1014,58 @@ async def afk_task():
 
 # -------------------- Ready / Sync --------------------
 
+
+
+async def cleanup_task():
+    """Löscht Event-Post + Thread standardmäßig 2h nach Start (wenn nicht deaktiviert)."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = _now_utc()
+        for mid_s, ev in list(active_events.items()):
+            hours = ev.get("auto_delete_hours", AUTO_DELETE_HOURS_DEFAULT)
+            if hours is None:
+                continue
+            try:
+                dt_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+            except Exception:
+                continue
+            if now < dt_utc + timedelta(hours=hours):
+                continue
+
+            guild = bot.get_guild(int(ev["guild_id"]))
+            if guild:
+                # delete thread first
+                try:
+                    tid = ev.get("thread_id")
+                    if tid:
+                        th = guild.get_thread(int(tid))
+                        if th:
+                            await th.delete()
+                        else:
+                            # try fetch
+                            fetched = await bot.fetch_channel(int(tid))
+                            if isinstance(fetched, discord.Thread):
+                                await fetched.delete()
+                except Exception:
+                    pass
+
+                # delete message
+                try:
+                    msg = await fetch_message(guild, int(ev["channel_id"]), int(mid_s))
+                    if msg:
+                        await msg.delete()
+                except Exception:
+                    pass
+
+            # remove from store
+            try:
+                del active_events[mid_s]
+                await safe_save()
+            except Exception:
+                pass
+
+        await asyncio.sleep(60)
+
 @bot.event
 async def on_ready():
     global TASKS_STARTED
@@ -955,6 +1079,7 @@ async def on_ready():
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
+        BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
         TASKS_STARTED = True
 
 # -------------------- Main --------------------
