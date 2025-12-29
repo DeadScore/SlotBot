@@ -338,6 +338,23 @@ def build_slots_text(ev: dict) -> str:
         out.append("")
     return "\n".join(out).strip()
 
+
+async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
+    """Postet eine Nachricht in den Event-Thread (falls vorhanden)."""
+    try:
+        tid = ev.get("thread_id")
+        if not tid:
+            return
+        th = guild.get_thread(int(tid))
+        if th is None:
+            ch = await bot.fetch_channel(int(tid))
+            if isinstance(ch, discord.Thread):
+                th = ch
+        if th:
+            await th.send(content)
+    except Exception:
+        pass
+
 async def fetch_message(guild: discord.Guild, channel_id: int, message_id: int) -> Optional[discord.Message]:
     ch = guild.get_channel(channel_id)
     if ch is None:
@@ -1093,6 +1110,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     mains = list(slot.get("main", []))
     wl = list(slot.get("waitlist", []))
     changed = False
+    promoted = []
     if user_id in mains:
         mains.remove(user_id)
         slot["main"] = mains
@@ -1102,10 +1120,16 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         slot["waitlist"] = wl
         changed = True
     if changed:
-        _slot_promote_waitlist(ev)
+        promoted = _slot_promote_waitlist(ev)
         active_events[_event_key(payload.message_id)] = ev
         await safe_save()
         await update_event_post(guild, payload.message_id)
+    try:
+        await post_to_event_thread(guild, ev, f"➖ Abmeldung: <@{user_id}>")
+        if promoted:
+            await post_to_event_thread(guild, ev, "\n".join([f"➕ Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
+    except Exception:
+        pass
 
 # -------------------- Background tasks --------------------
 
@@ -1191,37 +1215,42 @@ async def afk_task():
                 st["last_prompt_at"] = None
 
             # Ende des Fensters: freigeben
+                        
             if now >= window_end:
                 removed = set()
+                promoted: list[tuple[str, int]] = []
                 if unanswered:
                     for uid in list(unanswered):
                         _slot_remove_user(ev, uid)
                         removed.add(uid)
-                    _slot_promote_waitlist(ev)
+                    promoted = _slot_promote_waitlist(ev)
                     active_events[mid_s] = ev
                     await safe_save()
                     try:
                         await update_event_post(guild, int(mid_s))
                     except Exception:
                         pass
-
+            
                 st["finished"] = True
                 st["confirmed"] = list(confirmed)
                 ev["afk_state"] = st
                 active_events[mid_s] = ev
                 await safe_save()
-
-                # kurze Info in Channel
+            
+                # Infos in den Event-Thread
                 try:
-                    ch = guild.get_channel(int(ev["channel_id"])) or await bot.fetch_channel(int(ev["channel_id"]))
                     if removed:
-                        await ch.send(f"🚪 AFK-Check vorbei für **{ev.get('title','(Event)')}**: **{len(removed)}** Slot(s) freigegeben.")
+                        await post_to_event_thread(guild, ev, "🚪 Slots freigegeben: " + ", ".join([f"<@{u}>" for u in removed]))
+                    if promoted:
+                        await post_to_event_thread(guild, ev, "\n".join([f"➕ Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
+                    if not removed:
+                        await post_to_event_thread(guild, ev, "✅ AFK-Check vorbei: alle bestätigt.")
                     else:
-                        await ch.send(f"✅ AFK-Check vorbei für **{ev.get('title','(Event)')}**: alle bestätigt.")
+                        await post_to_event_thread(guild, ev, f"🚪 AFK-Check vorbei: **{len(removed)}** Slot(s) freigegeben.")
                 except Exception:
                     pass
                 continue
-
+            
             last_prompt_at = st.get("last_prompt_at")
             last_dt = None
             if isinstance(last_prompt_at, str):
