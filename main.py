@@ -156,8 +156,20 @@ def parse_date_flexible(date_str: str, now_local: Optional[datetime] = None) -> 
 
     return None
 
-def format_dt_local(dt_utc: datetime) -> str:
+def format_dt_local(dt_utc) -> str:
+    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin). Akzeptiert datetime oder ISO-String."""
+    if dt_utc is None:
+        return "—"
+    if isinstance(dt_utc, str):
+        try:
+            dt_utc = datetime.fromisoformat(dt_utc)
+        except Exception:
+            return str(dt_utc)
+    dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
+    return dt_local.strftime("%d.%m.%Y %H:%M")
+
+
     return dt_local.strftime("%d.%m.%Y %H:%M")
 
 def safe_int(x, default=None):
