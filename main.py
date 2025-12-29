@@ -344,9 +344,11 @@ def _default_slots_dict() -> Dict[str, dict]:
 def build_event_header(ev: dict) -> str:
     lines = []
     lines.append(f"📣 **Event:** {ev['title']}")
-    lines.append(f"🗓️ **Zeit:** {format_dt_local(ev['event_time_utc'])}")
+    lines.append(f"⏰ **START (Berlin):** **{format_dt_local(ev['event_time_utc'])} Uhr**")
     lines.append(f"🎯 **Zweck:** {ev.get('zweck','-')}")
     lines.append(f"📍 **Ort:** {ev.get('ort','-')}")
+    if ev.get("min_level") is not None:
+        lines.append(f"🎚️ **Mindestlevel:** **{int(ev.get('min_level') or 0)}+**")
     if ev.get("treffpunkt"):
         lines.append(f"📌 **Treffpunkt:** {ev.get('treffpunkt')}")
     if ev.get("gruppenlead"):
@@ -460,9 +462,10 @@ def _slot_add_user(ev: dict, emoji: str, user_id: int) -> Tuple[str, str]:
     # only one main slot across all roles
     if user_id in _slot_all_mains(ev):
         return "reject", "Du bist schon als Main in einem Slot eingetragen."
-    slot = ev["slots"].get(emoji)
-    if not slot:
+    slot_key = _find_slot_key(ev, emoji)
+    if not slot_key:
         return "reject", "Unbekannter Slot."
+    slot = ev["slots"][slot_key]
     limit = int(slot.get("limit", 0))
     mains = list(slot.get("main", []))
     wl = list(slot.get("waitlist", []))
@@ -476,7 +479,10 @@ def _slot_add_user(ev: dict, emoji: str, user_id: int) -> Tuple[str, str]:
     slot["waitlist"] = wl
     return "wait", "Slot voll, auf Warteliste gesetzt."
 
-def _slot_promote_waitlist(ev: dict):
+
+def _slot_promote_waitlist(ev: dict) -> List[Tuple[str, int]]:
+    """Füllt freie Main-Slots aus der Warteliste auf. Gibt Liste der Nachrücker zurück."""
+    promoted: List[Tuple[str, int]] = []
     for emoji, slot in ev["slots"].items():
         limit = int(slot.get("limit", 0))
         mains = list(slot.get("main", []))
@@ -487,10 +493,12 @@ def _slot_promote_waitlist(ev: dict):
             if nxt in mains:
                 continue
             mains.append(nxt)
+            promoted.append((emoji, int(nxt)))
             changed = True
         if changed:
             slot["main"] = mains
             slot["waitlist"] = wl
+    return promoted
 
 # -------------------- Text replacement helpers for edits --------------------
 
@@ -578,6 +586,7 @@ async def event_create(
     datum: str,
     zeit: str,
     slots: str,
+    level: int,
     gruppenlead: Optional[str] = None,
     treffpunkt: Optional[str] = None,
     auto_delete: Optional[str] = None,
@@ -618,11 +627,19 @@ async def event_create(
         await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
     slots = slots_dict
+
+    # Mindestlevel
+    if level < 1 or level > 100:
+        await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+        return
+
     ev = {
         "guild_id": interaction.guild.id,
         "channel_id": interaction.channel.id,
         "thread_id": None,
         "owner_id": interaction.user.id,
+        "creator_id": interaction.user.id,
+        "min_level": int(level),
         "title": title,
         "art": art.value,
         "zweck": zweck.strip(),
@@ -677,6 +694,7 @@ async def event_create(
     zeit="Neue Zeit (optional)",
     gruppenlead="Neuer Gruppenlead (optional)",
     anmerkung="Neue Anmerkung (optional)",
+    level="Neues Mindestlevel (z.B. 61)"
 )
 @bot.tree.command(name="event_edit", description="Bearbeitet ein Event (nur Ersteller/Admin)")
 @app_commands.autocomplete(event=_event_autocomplete)
@@ -688,6 +706,7 @@ async def event_edit(
     datum: Optional[str] = None,
     zeit: Optional[str] = None,
     gruppenlead: Optional[str] = None,
+    level: Optional[int] = None,
     anmerkung: Optional[str] = None,
 ):
     if interaction.guild is None:
@@ -792,6 +811,18 @@ async def event_edit(
                 header_text = header_text.replace("─────────────────────────────────", f"{PREFIX_LEAD} {gl}\n─────────────────────────────────", 1)
             ev["gruppenlead"] = gl
             changes.append(f"Gruppenlead: ~~{old}~~ → {gl}")
+
+    # Mindestlevel
+    if level is not None:
+        if level < 1 or level > 100:
+            await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+            return
+        old_lvl = ev.get("min_level")
+        ev["min_level"] = int(level)
+        if old_lvl is None:
+            changes.append(f"Mindestlevel: {int(level)}+")
+        else:
+            changes.append(f"Mindestlevel: ~~{int(old_lvl)}+~~ → {int(level)}+")
 
     # Anmerkung
     if anmerkung is not None:
@@ -1070,6 +1101,120 @@ async def roll_watcher_task():
 async def test_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Bot läuft. Slash-Commands sind aktiv.", ephemeral=True)
 
+
+
+# -------------------- Event Delete (nur eigene) --------------------
+
+async def event_delete_autocomplete(interaction: discord.Interaction, current: str):
+    """Autocomplete: normal nur eigene Events; Admins alle."""
+    res = []
+    if interaction.guild is None:
+        return res
+    guild_id = interaction.guild.id
+    uid = interaction.user.id
+
+    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
+    for mid_s, ev in active_events.items():
+        if int(ev.get("guild_id", 0)) != int(guild_id):
+            continue
+        if (not isadm) and int(ev.get("creator_id", 0)) != int(uid):
+            continue
+        title = ev.get("title", "Event")
+        when = format_dt_local(ev.get("event_time_utc"))
+        label = f"{title} ({when})"
+        if current and current.lower() not in label.lower():
+            continue
+        res.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
+        if len(res) >= 25:
+            break
+    return res
+
+class ConfirmDeleteView(discord.ui.View):
+    def __init__(self, *, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.confirmed = False
+
+    @discord.ui.button(label="Löschen", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        self.stop()
+        await interaction.response.defer(ephemeral=True)
+
+    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = False
+        self.stop()
+        await interaction.response.defer(ephemeral=True)
+
+@bot.tree.command(name="event_delete", description="Löscht ein Event (normal: nur deine Events).")
+@app_commands.describe(event="Event auswählen")
+@app_commands.autocomplete(event=event_delete_autocomplete)
+async def event_delete_cmd(interaction: discord.Interaction, event: str):
+    if interaction.guild is None:
+        await interaction.response.send_message("❌ Nur auf einem Server.", ephemeral=True)
+        return
+
+    ev = active_events.get(str(event))
+    if not ev or int(ev.get("guild_id", 0)) != interaction.guild.id:
+        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
+        return
+
+    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
+    if (not isadm) and int(ev.get("creator_id", ev.get("owner_id", 0)) or 0) != interaction.user.id:
+        await interaction.response.send_message("❌ Du kannst nur deine eigenen Events löschen.", ephemeral=True)
+        return
+
+    view = ConfirmDeleteView(timeout=30)
+    await interaction.response.send_message(
+        f"⚠️ Willst du das Event wirklich löschen?\n**{ev.get('title','Event')}** ({format_dt_local(ev.get('event_time_utc'))})",
+        ephemeral=True,
+        view=view,
+    )
+    await view.wait()
+
+    if not view.confirmed:
+        try:
+            await interaction.followup.send("✅ Abgebrochen.", ephemeral=True)
+        except Exception:
+            pass
+        return
+
+    guild = interaction.guild
+
+    # Thread löschen
+    try:
+        tid = ev.get("thread_id")
+        if tid:
+            th = guild.get_thread(int(tid))
+            if th is None:
+                ch = await bot.fetch_channel(int(tid))
+                if isinstance(ch, discord.Thread):
+                    th = ch
+            if th:
+                await th.delete()
+    except Exception:
+        pass
+
+    # Message löschen
+    try:
+        msg = await fetch_message(guild, int(ev["channel_id"]), int(event))
+        if msg:
+            await msg.delete()
+    except Exception:
+        pass
+
+    # Aus Speicher entfernen
+    try:
+        del active_events[str(event)]
+        await safe_save()
+    except Exception:
+        pass
+
+    try:
+        await interaction.followup.send("🗑️ Event gelöscht.", ephemeral=True)
+    except Exception:
+        pass
+
 # -------------------- Reactions --------------------
 
 @bot.event
@@ -1100,6 +1245,11 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                 user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
                 if user:
                     await user.send("✅ Bestätigt! Du bist für das Event eingeplant.")
+                    try:
+                        if payload.message_id in afkdmprompts:
+                            del afkdmprompts[payload.message_id]
+                    except Exception:
+                        pass
             except Exception:
                 pass
         return
@@ -1146,12 +1296,14 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         return
     emoji = str(payload.emoji)
     user_id = payload.user_id
-    slot = ev["slots"].get(emoji)
-    if not slot:
+    slot_key = _find_slot_key(ev, emoji)
+    if not slot_key:
         return
+    slot = ev["slots"][slot_key]
     mains = list(slot.get("main", []))
     wl = list(slot.get("waitlist", []))
     changed = False
+    promoted: List[Tuple[str, int]] = []
     promoted = []
     if user_id in mains:
         mains.remove(user_id)
@@ -1379,6 +1531,15 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    try:
+        # Schnellere Command-Aktivierung: pro Guild syncen
+        for g in bot.guilds:
+            try:
+                await bot.tree.sync(guild=g)
+            except Exception:
+                pass
+    except Exception:
+        pass
     global TASKS_STARTED
     try:
         synced = await bot.tree.sync()
