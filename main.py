@@ -22,6 +22,11 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
+try:
+    import emoji as emoji_lib
+except Exception:
+    emoji_lib = None
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -313,14 +318,24 @@ def _parse_slots_spec(spec: str, guild: Optional[discord.Guild]) -> Optional[Dic
         if num < 0 or num > 99:
             return None
 
-        # Resolve :name: to actual guild emoji if available
+        # Resolve :name: to actual emoji if possible
         if COLON_NAME_RE.match(emo):
             resolved = _resolve_colon_name_to_guild_emoji(emo, guild)
             if resolved:
                 emo = resolved
             else:
-                # Discord does NOT accept :name: as a reaction emoji. Reject clearly.
-                return None
+                # Try to convert standard shortcodes like :crossed_swords: -> ⚔️ (requires 'emoji' lib)
+                if emoji_lib is not None:
+                    try:
+                        conv = emoji_lib.emojize(emo, language="alias")
+                        if conv and conv != emo:
+                            emo = conv
+                        else:
+                            return None
+                    except Exception:
+                        return None
+                else:
+                    return None
 
         if not (CUSTOM_EMOJI_RE.match(emo) or len(emo) <= 64):
             return None
@@ -705,6 +720,7 @@ async def event_edit(
     treffpunkt: Optional[str] = None,
     datum: Optional[str] = None,
     zeit: Optional[str] = None,
+    slots: Optional[str] = None,
     gruppenlead: Optional[str] = None,
     level: Optional[int] = None,
     anmerkung: Optional[str] = None,
@@ -763,6 +779,141 @@ async def event_edit(
         ev["event_time_utc"] = new_utc.isoformat()
         changes.append(f"Zeit: ~~{old_val}~~ → {new_val}")
         dt_utc = new_utc
+
+
+    # Slots (mit Erhalt der bestehenden Anmeldungen)
+    if slots is not None:
+        new_slots = parse_slots(slots)
+        if not new_slots:
+            await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2\nTipp: Nutze echte Emojis (Emoji-Auswahl) – ':name:' klappt nur, wenn Discord daraus ein Emoji macht (oder du das Emoji direkt einfügst).", ephemeral=True)
+            return
+
+        old_slots = ev.get("slots", {})
+        updated_slots = {}
+
+        def _n(x: str) -> str:
+            try:
+                return _normalize_emoji(x)
+            except Exception:
+                return str(x)
+
+        old_by_norm = {_n(k): k for k in old_slots.keys()}
+
+        new_norms = {_n(k) for k in new_slots.keys()}
+        not_removable = []
+        for ok, oslot in old_slots.items():
+            if _n(ok) not in new_norms:
+                if list(oslot.get("main", [])) or list(oslot.get("waitlist", [])):
+                    not_removable.append(ok)
+
+        if not_removable:
+            await interaction.response.send_message(
+                "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable),
+                ephemeral=True,
+            )
+            return
+
+        slot_lines = []
+        overflow_notes = []
+        overflow_moved: Dict[str, int] = {}
+
+        for nk, nlimit in new_slots.items():
+            nlimit = int(nlimit)
+            ok = old_by_norm.get(_n(nk))
+            if ok is not None:
+                oslot = old_slots.get(ok, {})
+                mains = list(oslot.get("main", []))
+                wl = list(oslot.get("waitlist", []))
+                old_limit = int(oslot.get("limit", 0))
+
+                moved = 0
+                if old_limit and nlimit < old_limit and len(mains) > nlimit:
+                    overflow = mains[nlimit:]
+                    mains = mains[:nlimit]
+                    wl = overflow + wl
+                    moved = len(overflow)
+                    overflow_moved[nk] = moved
+
+                updated_slots[nk] = {"limit": nlimit, "main": mains, "waitlist": wl}
+
+                if old_limit != nlimit:
+                    line = f"{nk}: {old_limit} → {nlimit}"
+                    if moved:
+                        line += f" (⚠️ {moved} auf Warteliste)"
+                    slot_lines.append(line)
+            else:
+                updated_slots[nk] = {"limit": nlimit, "main": [], "waitlist": []}
+                slot_lines.append(f"{nk}: neu ({nlimit})")
+
+        # Entfernte Slots (nur möglich, wenn leer)
+        for ok in old_slots.keys():
+            if _n(ok) not in new_norms:
+                slot_lines.append(f"{ok}: entfernt")
+
+        ev["slots"] = updated_slots
+
+        try:
+            promoted = _slot_promote_waitlist(ev)
+        except Exception:
+            promoted = []
+
+        if slot_lines:
+            changes.append("Slots: " + ", ".join(slot_lines))
+
+
+        try:
+            for ek in updated_slots.keys():
+                try:
+                    await msg.add_reaction(ek)
+                except Exception:
+                    pass
+            for ok in old_slots.keys():
+                if _n(ok) not in new_norms:
+                    try:
+                        await msg.clear_reaction(ok)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if slot_lines:
+            try:
+                tid = ev.get("thread_id")
+                thread = None
+                if tid:
+                    thread = guild.get_thread(int(tid))
+                    if thread is None:
+                        ch = await bot.fetch_channel(int(tid))
+                        if isinstance(ch, discord.Thread):
+                            thread = ch
+                if thread:
+                    pretty = "\n".join(f"• {x}" for x in slot_lines)
+                    await thread.send("🛠️ **Slots angepasst:**\n" + pretty)
+            except Exception:
+                pass
+
+
+
+        if promoted:
+            try:
+                tid = ev.get("thread_id")
+                thread = None
+                if tid:
+                    thread = guild.get_thread(int(tid))
+                    if thread is None:
+                        ch = await bot.fetch_channel(int(tid))
+                        if isinstance(ch, discord.Thread):
+                            thread = ch
+                if thread:
+                    lines = []
+                    for emo, uid in promoted:
+                        member = guild.get_member(int(uid))
+                        name = member.display_name if member else f"<@{uid}>"
+                        lines.append(f"{emo} → {name}")
+                    if lines:
+                        await thread.send("🔄 **Nachgerückt:**\n" + "\n".join(f"• {x}" for x in lines))
+            except Exception:
+                pass
 
     # Ort
     if ort is not None:
