@@ -1,120 +1,4 @@
 {
-    "1452616583523471431": {
-        "title": "Items",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    1294305436580843604
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 1,
-                "main": [
-                    373132834883371009
-                ],
-                "waitlist": [
-                    617440482032615434
-                ],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "\u2705": {
-                "limit": 25,
-                "main": [
-                    398510011485257728,
-                    222744756134871041,
-                    404173735130562562,
-                    702183001781698692,
-                    893474722921189386,
-                    508348086922510348,
-                    1273360379271053457,
-                    1027946186700771378,
-                    770603455810895922
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe2 **PvE \u2013 Neue Gruppensuche!**\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Items\n\ud83d\udccd **Ort:** Carphin\n\ud83d\udd52 **Datum/Zeit:** Donnerstag, 01.01.2026 19:30 CET\n\u2694\ufe0f **Levelbereich:** 18+\n\ud83d\udcac **Stil:** Gem\u00fctlich\n\ud83c\udff7\ufe0f **Typ:** Raid\n\ud83d\udcdd **Anmerkung:** Treffpunkt Emberspring bei Carphin / Jede klasse willkommen. Einfach mit \u2705  anmelden.\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 1294305436580843604,
-        "event_time": "2026-01-01T18:30:00+00:00",
-        "thread_id": 1452616583523471431,
-        "auto_delete_stunden": 1,
-        "delete_at": "2026-01-01T19:30:00+00:00",
-        "art": "PvE"
-    },
-    "1453054803193102586": {
-        "title": "Gear und EP",
-        "slots": {
-            "<:Tank_Archetype:1345126746340458527>": {
-                "limit": 1,
-                "main": [
-                    314461789012361217
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Cleric_Archetype:1345126828280512683>": {
-                "limit": 2,
-                "main": [
-                    172978190296285184,
-                    373132834883371009
-                ],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:Bard_Archetype:1345126811880914944>": {
-                "limit": 1,
-                "main": [],
-                "waitlist": [],
-                "reminded": [],
-                "afk_dm_sent": []
-            },
-            "<:DPS_Archetype:1422234733177208863>": {
-                "limit": 4,
-                "main": [
-                    398510011485257728,
-                    1027946186700771378,
-                    404173735130562562,
-                    770603455810895922
-                ],
-                "waitlist": [
-                    508348086922510348,
-                    702183001781698692,
-                    1273360379271053457,
-                    506116955862859818,
-                    616690315667177484
-                ],
-                "reminded": [],
-                "afk_dm_sent": []
-            }
-        },
-        "channel_id": 1318316138802712576,
-        "guild_id": 623245828403888140,
-        "header": "\ud83d\udfe3 **PVX \u2013 Neue Gruppensuche!**\n\ud83d\udcdd **Anmerkung:** Wir treffen uns am Gildenspot bzw am Strand. 1# ist EP hei\u00dft wir werden durchwechseln sobald jemand max level erreicht hat kann ein anderer nachr\u00fccken.\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\ud83c\udfaf **Zweck:** Gear und EP\n\ud83d\udccd **Ort:** ~~Gravepeak~~ \u2192 Hecribba\n\ud83d\udccc **Treffpunkt:** Tower eingang 19:30\n\ud83d\udd52 **Datum/Zeit:** Montag, 29.12.2025 19:45 CET\n\u2694\ufe0f **Levelbereich:** 20+\n\ud83d\udcac **Stil:** Organisiert\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-        "creator_id": 404173735130562562,
-        "event_time": "2025-12-29T18:45:00+00:00",
-        "thread_id": 1453054803193102586,
-        "auto_delete_stunden": 1,
-        "delete_at": "2025-12-29T19:45:00+00:00",
-        "art": "PVX"
-    },
     "_subscriptions": {
         "1420155879759675496": {
             "PvE": [],
@@ -136,6 +20,7 @@
             ]
         }
     },
+    "_points": {},
     "_history": [
         {
             "guild_id": 1420155879759675496,
