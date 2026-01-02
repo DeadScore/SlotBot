@@ -2,3 +2,4 @@ discord.py
 Flask
 requests
 pytz
+emoji==2.12.1
