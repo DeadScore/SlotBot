@@ -2644,6 +2644,7 @@ def run_bot():
 
 @bot.event
 async def on_ready():
+    global TASKS_STARTED
     # Globaler Slash-Command Sync (Multi-Server safe)
     try:
         synced = await bot.tree.sync()
