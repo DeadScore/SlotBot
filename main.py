@@ -23,14 +23,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
 import discord
-
-import logging
-discord.utils.setup_logging(level=logging.INFO)
-
-# ---- Logging (helps diagnose "Die Anwendung reagiert nicht") ----
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
-logging.getLogger('discord').setLevel(logging.INFO)
-
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -75,16 +67,6 @@ intents.messages = True
 intents.message_content = False  # not needed for slash + reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-@bot.tree.command(name="ping", description="Quick health check (antwortet sofort)")
-async def ping_cmd(interaction: discord.Interaction):
-    try:
-        # respond fast; no heavy work
-        await interaction.response.send_message("🏓 Pong! Bot ist online.", ephemeral=True)
-    except discord.InteractionResponded:
-        await interaction.followup.send("🏓 Pong! Bot ist online.", ephemeral=True)
-
 
 
 @bot.tree.error
@@ -611,6 +593,7 @@ async def _event_delete_autocomplete(interaction: discord.Interaction, current: 
     return await _event_autocomplete(interaction, current)
 
 @app_commands.choices(art=ART_CHOICES)
+@bot.tree.command(name="event_create", description="Alias für /event (Event erstellen)")
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
 async def event_create(
     interaction: discord.Interaction,
@@ -626,21 +609,24 @@ async def event_create(
     auto_delete: Optional[str] = None,
     anmerkung: Optional[str] = None,
 ):
+    # Discord expects an initial ACK within ~3 seconds.
+    # Defer immediately to avoid "Die Anwendung reagiert nicht".
+    try:
+        if not interaction.response.is_done():
+    except Exception:
+        pass
+
     if interaction.guild is None or interaction.channel is None:
-        # Not deferred yet -> must use response
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True)
         return
 
-    # Defer immediately to avoid Discord's 3s interaction timeout
-    await interaction.response.defer(ephemeral=True)
-
     dt_date = parse_date_flexible(datum)
     if not dt_date:
-        await interaction.followup.send("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
         return
     hm = _parse_time_hhmm(zeit)
     if not hm:
-        await interaction.followup.send("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
         return
 
     dt_local = dt_date.replace(hour=hm[0], minute=hm[1])
@@ -651,7 +637,7 @@ async def event_create(
     auto_delete_hours = AUTO_DELETE_HOURS_DEFAULT
     if auto_delete is not None and auto_delete.strip() != "":
         if auto_delete.strip().lower() != "off":
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ auto_delete akzeptiert nur `off` (oder leer lassen).",
                 ephemeral=True,
             )
@@ -662,13 +648,13 @@ async def event_create(
     # Build slots (default oder frei definierbar via `slots` Parameter)
     slots_dict = _parse_slots_spec(slots, interaction.guild)
     if not slots_dict:
-        await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
     slots = slots_dict
 
     # Mindestlevel
     if level < 1 or level > 100:
-        await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+        await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
         return
 
     ev = {
@@ -699,7 +685,7 @@ async def event_create(
     content = build_event_header(ev_post) + "\n\n" + build_slots_text({"slots": ev_post.get("slots", slots) or slots, **ev_post})
     content += "\n\nReagiere mit dem passenden Emoji um dich einzutragen."
 
-    await interaction.followup.send("✅ Event wird erstellt…", ephemeral=True)
+    await interaction.response.send_message("✅ Event wird erstellt…", ephemeral=True)
     msg = await interaction.channel.send(content)
     # add reactions
     for emoji in slots.keys():
@@ -1710,7 +1696,6 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online als {bot.user} (Guilds: {len(bot.guilds)})")
     try:
         # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
@@ -1728,67 +1713,16 @@ async def on_ready():
         print(f"❌ Slash Sync Fehler: {e}")
     print(f"🤖 SlotBot online als {bot.user}")
 
-@bot.listen("on_interaction")
-async def _log_interaction(interaction: discord.Interaction):
-    """Log interactions without overriding discord.py's default app-command dispatch."""
-    try:
-        itype = getattr(interaction, "type", None)
-        # For slash commands, data.name is the command name
-        name = None
-        if getattr(interaction, "data", None) and isinstance(interaction.data, dict):
-            name = interaction.data.get("name")
-        user = getattr(interaction, "user", None) or getattr(interaction, "member", None)
-        uname = getattr(user, "name", str(user))
-        gid = getattr(getattr(interaction, "guild", None), "id", None)
-        print(f"➡️ Interaction: type={itype} name={name} user={uname} guild={gid}")
-    except Exception as e:
-        print("⚠️ Interaction log error:", repr(e))
+    if not TASKS_STARTED:
+        BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
+        BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
+        BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
+        BACKGROUND_TASKS["roll_watcher"] = bot.loop.create_task(roll_watcher_task(), name="slotbot_roll_watcher")
+        TASKS_STARTED = True
 
+# -------------------- Main --------------------
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
-
-    if not DISCORD_TOKEN:
-        print("❌ DISCORD_TOKEN fehlt (Environment Variable). Bot bleibt offline, Slash Commands reagieren nicht.")
-        # Flask weiterlaufen lassen, damit Render nicht meckert
-        threading.Event().wait()
-        raise SystemExit(1)
-
-    # Flask (keep-alive / health) in a daemon thread
     threading.Thread(target=run_flask, daemon=True).start()
-
-    async def _run_discord_with_backoff():
-        """
-        Render (oder ähnliche Hoster) starten den Prozess bei Exit sofort neu.
-        Wenn Discord uns wegen global rate limits blockt (HTTP 429), würden wir sonst
-        in eine Crash-Loop geraten und die Sperre verlängern.
-        """
-        backoff = 30          # seconds
-        max_backoff = 15 * 60 # 15 minutes
-
-        while True:
-            try:
-                print("🔐 Discord login...")
-                await bot.start(DISCORD_TOKEN)
-                # bot.start läuft "für immer" — wenn wir hier rausfallen, wurde gestoppt
-                backoff = 30
-            except discord.HTTPException as e:
-                # Global/Cloudflare block wegen zu vieler Requests (meist durch Restart-Loop)
-                status = getattr(e, "status", None)
-                if status == 429:
-                    print(f"⚠️ Discord 429 (global rate limit). Warte {backoff}s und versuche es erneut ...")
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, max_backoff)
-                    continue
-                raise
-            except Exception as e:
-                print("❌ Bot ist abgestürzt:", repr(e))
-                await asyncio.sleep(10)
-            finally:
-                try:
-                    if not bot.is_closed():
-                        await bot.close()
-                except Exception:
-                    pass
-
-    asyncio.run(_run_discord_with_backoff())
+    bot.run(DISCORD_TOKEN)
