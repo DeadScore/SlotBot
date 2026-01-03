@@ -68,36 +68,6 @@ intents.message_content = False  # not needed for slash + reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
-# -------------------- Global Slash-Command Error Handler --------------------
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    # Log full error server-side
-    try:
-        import traceback as _tb
-        print("❌ Slash-Command Error:", repr(error))
-        _tb.print_exception(type(error), error, error.__traceback__)
-    except Exception:
-        pass
-
-    msg = "❌ Fehler beim Ausführen des Befehls. Bitte später nochmal probieren."
-    # Show more detail for common user mistakes
-    if isinstance(error, app_commands.CommandOnCooldown):
-        msg = f"⏳ Cooldown: bitte in {error.retry_after:.1f}s nochmal."
-    elif isinstance(error, app_commands.MissingPermissions):
-        msg = "⛔ Dir fehlen Rechte für diesen Befehl."
-    elif isinstance(error, app_commands.CheckFailure):
-        msg = "⛔ Du darfst diesen Befehl hier/so nicht nutzen."
-
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except Exception:
-        pass
-
-
 # -------------------- Helpers / Persistence --------------------
 
 def _now_utc() -> datetime:
@@ -1723,30 +1693,26 @@ async def on_ready():
 
 # -------------------- Main --------------------
 
-if __name__ == "__main__":
-    print("🚀 Starte SlotBot (rebuilt) + Flask ...")
-    threading.Thread(target=run_flask, daemon=True).start()
-    
 
-def run_with_backoff():
-    """Startet den Bot stabil. Bei Cloudflare/Discord 429 (Error 1015) wartet er und versucht es erneut."""
-    backoff = 15
-    max_backoff = 10 * 60
+if __name__ == "__main__":
+    print("🚀 Starte SlotBot + Flask (stabil) ...")
+    if not DISCORD_TOKEN:
+        raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
+
+    def run_flask():
+        port = int(os.environ.get("PORT", "10000"))
+        try:
+            flask_app.run(host="0.0.0.0", port=port)
+        except Exception as e:
+            print("❌ Flask crashed:", e)
+
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Discord-Bot blockierend starten. Bei Login-Problemen (429/Cloudflare) nicht crash-loop-en.
     while True:
         try:
             bot.run(DISCORD_TOKEN)
-            return
-        except discord.HTTPException as e:
-            # Cloudflare rate limit page often comes as HTTPException 429 with HTML body
-            status = getattr(e, "status", None)
-            if status == 429:
-                wait_s = backoff
-                print(f"⚠️ Discord/Cloudflare Rate-Limit beim Login (429). Warte {wait_s}s und versuche erneut…")
-                import time
-                time.sleep(wait_s)
-                backoff = min(backoff * 2, max_backoff)
-                continue
-            raise
-
-
-    run_with_backoff()
+        except Exception as e:
+            print("❌ Discord Bot crashed:", repr(e))
+            time.sleep(60)
