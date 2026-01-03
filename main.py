@@ -68,6 +68,36 @@ intents.message_content = False  # not needed for slash + reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
+# -------------------- Global Slash-Command Error Handler --------------------
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    # Log full error server-side
+    try:
+        import traceback as _tb
+        print("❌ Slash-Command Error:", repr(error))
+        _tb.print_exception(type(error), error, error.__traceback__)
+    except Exception:
+        pass
+
+    msg = "❌ Fehler beim Ausführen des Befehls. Bitte später nochmal probieren."
+    # Show more detail for common user mistakes
+    if isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"⏳ Cooldown: bitte in {error.retry_after:.1f}s nochmal."
+    elif isinstance(error, app_commands.MissingPermissions):
+        msg = "⛔ Dir fehlen Rechte für diesen Befehl."
+    elif isinstance(error, app_commands.CheckFailure):
+        msg = "⛔ Du darfst diesen Befehl hier/so nicht nutzen."
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+
 # -------------------- Helpers / Persistence --------------------
 
 def _now_utc() -> datetime:
@@ -1693,41 +1723,30 @@ async def on_ready():
 
 # -------------------- Main --------------------
 
-def _run_bot_with_retry():
-    # Wenn Render/Deploy mehrfach neu startet, kann Discord/Cloudflare (Error 1015 / HTTP 429) kurzzeitig blocken.
-    # Dann NICHT in eine Crash-Reboot-Schleife laufen -> Backoff.
-    backoff = 30  # Sekunden
-    max_backoff = 15 * 60  # 15 Minuten
-
-    while True:
-        try:
-            if not DISCORD_TOKEN:
-                raise RuntimeError("DISCORD_TOKEN fehlt. Bitte in Render → Environment Variables setzen.")
-            bot.run(DISCORD_TOKEN)
-            # bot.run ist blockierend und endet normalerweise nur bei Stop/Exception.
-            return
-        except discord.errors.HTTPException as e:
-            # Typisch: 429 + Cloudflare HTML (Error 1015) beim Login
-            status = getattr(e, "status", None)
-            txt = str(e)
-            if status == 429 or "Error 1015" in txt or "rate limited" in txt or "429" in txt:
-                wait = min(backoff, max_backoff)
-                print(f"⚠️ Discord/Cloudflare Rate-Limit beim Login (HTTP 429/1015). Warte {wait}s und versuche es erneut …")
-                time.sleep(wait)
-                backoff = min(backoff * 2, max_backoff)
-                continue
-            raise
-        except Exception as e:
-            # Sonstige Crashes: kurz warten, dann neu starten
-            print(f"❌ Discord Bot ist abgestürzt: {type(e).__name__}: {e}")
-            time.sleep(15)
-            continue
-
-
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
     threading.Thread(target=run_flask, daemon=True).start()
-    _run_bot_with_retry()
+    
 
-    threading.Thread(target=run_flask, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+def run_with_backoff():
+    """Startet den Bot stabil. Bei Cloudflare/Discord 429 (Error 1015) wartet er und versucht es erneut."""
+    backoff = 15
+    max_backoff = 10 * 60
+    while True:
+        try:
+            bot.run(DISCORD_TOKEN)
+            return
+        except discord.HTTPException as e:
+            # Cloudflare rate limit page often comes as HTTPException 429 with HTML body
+            status = getattr(e, "status", None)
+            if status == 429:
+                wait_s = backoff
+                print(f"⚠️ Discord/Cloudflare Rate-Limit beim Login (429). Warte {wait_s}s und versuche erneut…")
+                import time
+                time.sleep(wait_s)
+                backoff = min(backoff * 2, max_backoff)
+                continue
+            raise
+
+
+    run_with_backoff()
