@@ -1738,31 +1738,41 @@ async def cleanup_task():
 
         await asyncio.sleep(60)
 
+
+SYNC_DONE = False
+
 @bot.event
 async def on_ready():
-    try:
-        # Schnellere Command-Aktivierung: pro Guild syncen
-        for g in bot.guilds:
-            try:
-                await bot.tree.sync(guild=g)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    global TASKS_STARTED
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} Slash Commands global synchronisiert")
-    except Exception as e:
-        print(f"❌ Slash Sync Fehler: {e}")
-    print(f"🤖 SlotBot online als {bot.user}")
+    global TASKS_STARTED, SYNC_DONE
 
+    print(f"🤖 SlotBot online als {bot.user} (Guilds: {len(bot.guilds)})")
+
+    # ---- Slash command sync (do this once to avoid rate limits) ----
+    if not SYNC_DONE:
+        try:
+            sync_guild_id = os.getenv("SYNC_GUILD_ID")
+            if sync_guild_id:
+                g = bot.get_guild(int(sync_guild_id))
+                if g:
+                    synced = await bot.tree.sync(guild=g)
+                    print(f"✅ {len(synced)} Slash Commands für Guild {g.id} synchronisiert (SYNC_GUILD_ID).")
+                else:
+                    print(f"⚠️ SYNC_GUILD_ID={sync_guild_id} gesetzt, aber Bot ist nicht in dieser Guild.")
+            else:
+                synced = await bot.tree.sync()
+                print(f"✅ {len(synced)} Slash Commands global synchronisiert.")
+        except Exception as e:
+            print(f"❌ Slash Sync Fehler: {e!r}")
+        SYNC_DONE = True
+
+    # ---- Background tasks (start once) ----
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
         BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
         BACKGROUND_TASKS["roll_watcher"] = bot.loop.create_task(roll_watcher_task(), name="slotbot_roll_watcher")
         TASKS_STARTED = True
+
 
 # -------------------- Main --------------------
 
