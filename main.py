@@ -68,52 +68,6 @@ intents.message_content = False  # not needed for slash + reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    # Always log the real error to console so you get a traceback in your host logs
-    import traceback
-    traceback.print_exception(type(error), error, error.__traceback__)
-
-    msg = "❌ Unerwarteter Fehler im Command. Schau in die Logs (Stacktrace)."
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except Exception:
-        pass
-
-
-@bot.event
-async def on_connect():
-    print("🔌 Discord Gateway connected.", flush=True)
-
-@bot.event
-async def on_disconnect():
-    print("🔌 Discord Gateway disconnected.", flush=True)
-
-@bot.event
-async def on_resumed():
-    print("🔁 Discord session resumed.", flush=True)
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    # Helpful to debug "Application did not respond": confirms the bot received the interaction at all.
-    try:
-        name = getattr(getattr(interaction, "data", None), "get", lambda *_: None)("name") if interaction.data else None
-    except Exception:
-        name = None
-    print(f"➡️ Interaction received: type={interaction.type} name={name} user={getattr(interaction.user,'id',None)} guild={interaction.guild_id}", flush=True)
-    try:
-        await bot.tree.process_interaction(interaction)
-    except Exception as e:
-        # Fallback: at least log
-        import traceback
-        traceback.print_exception(type(e), e, e.__traceback__)
-
-
-
 # -------------------- Helpers / Persistence --------------------
 
 def _now_utc() -> datetime:
@@ -582,31 +536,26 @@ def _build_event_title(art: str, zweck: str) -> str:
     return f"{art}: {z}"
 
 async def _event_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    try:
-        gid = interaction.guild_id
-        if not gid:
-            return []
-        current_l = (current or "").lower()
-        items = []
-        for mid_s, ev in list(active_events.items()):
-            if safe_int(ev.get("guild_id")) != gid:
-                continue
-            # only creator/admin can see
-            if not can_edit_event(interaction, ev):
-                continue
-            name = ev.get("title", f"Event {mid_s}")
-            if current_l and current_l not in name.lower():
-                continue
-            # include message id for uniqueness
-            label = f"{name} (#{mid_s[-6:]})"
-            items.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
-            if len(items) >= 25:
-                break
-        return items
-    except Exception as e:
-        print(f"⚠️ Autocomplete error in _event_autocomplete: {e!r}", flush=True)
+    gid = interaction.guild_id
+    if not gid:
         return []
-
+    current_l = (current or "").lower()
+    items = []
+    for mid_s, ev in active_events.items():
+        if safe_int(ev.get("guild_id")) != gid:
+            continue
+        # only creator/admin can see
+        if not can_edit_event(interaction, ev):
+            continue
+        name = ev.get("title", f"Event {mid_s}")
+        if current_l and current_l not in name.lower():
+            continue
+        # include message id for uniqueness
+        label = f"{name} (#{mid_s[-6:]})"
+        items.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
+        if len(items) >= 25:
+            break
+    return items
 
 @app_commands.describe(
     art="Event-Art",
@@ -629,7 +578,7 @@ async def _event_delete_autocomplete(interaction: discord.Interaction, current: 
 
 @app_commands.choices(art=ART_CHOICES)
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
-async def event(
+async def event_create(
     interaction: discord.Interaction,
     art: app_commands.Choice[str],
     zweck: str,
@@ -643,26 +592,17 @@ async def event(
     auto_delete: Optional[str] = None,
     anmerkung: Optional[str] = None,
 ):
-    # Discord expects an initial ACK within ~3 seconds.
-    # Quick validity checks (no awaits) are safe before deferring.
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True)
         return
 
-    # Defer immediately so Discord doesn't time out.
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-    except Exception:
-        pass
-
     dt_date = parse_date_flexible(datum)
     if not dt_date:
-        await interaction.followup.send("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
         return
     hm = _parse_time_hhmm(zeit)
     if not hm:
-        await interaction.followup.send("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
         return
 
     dt_local = dt_date.replace(hour=hm[0], minute=hm[1])
@@ -673,7 +613,7 @@ async def event(
     auto_delete_hours = AUTO_DELETE_HOURS_DEFAULT
     if auto_delete is not None and auto_delete.strip() != "":
         if auto_delete.strip().lower() != "off":
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ auto_delete akzeptiert nur `off` (oder leer lassen).",
                 ephemeral=True,
             )
@@ -684,13 +624,13 @@ async def event(
     # Build slots (default oder frei definierbar via `slots` Parameter)
     slots_dict = _parse_slots_spec(slots, interaction.guild)
     if not slots_dict:
-        await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
+        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
     slots = slots_dict
 
     # Mindestlevel
     if level < 1 or level > 100:
-        await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+        await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
         return
 
     ev = {
@@ -721,7 +661,7 @@ async def event(
     content = build_event_header(ev_post) + "\n\n" + build_slots_text({"slots": ev_post.get("slots", slots) or slots, **ev_post})
     content += "\n\nReagiere mit dem passenden Emoji um dich einzutragen."
 
-    await interaction.followup.send("✅ Event wird erstellt…", ephemeral=True)
+    await interaction.response.send_message("✅ Event wird erstellt…", ephemeral=True)
     msg = await interaction.channel.send(content)
     # add reactions
     for emoji in slots.keys():
@@ -746,49 +686,6 @@ async def event(
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
 
-
-@app_commands.describe(
-    art="Event-Art",
-    zweck="Kurz: was macht ihr?",
-    ort="Ort",
-    datum="Datum: z.B. 23.12.2025 / heute / morgen",
-    zeit="Zeit: HH:MM (z.B. 20:00)",
-    gruppenlead="Optional: Wer leitet?",
-    treffpunkt="Optional: Treffpunkt",
-    anmerkung="Optional: Zusatzinfo",
-    auto_delete="Optional: Auto-Löschen deaktivieren (off)",
-    slots="Slots (Pflicht): z.B. ⚔️:3 🛡️:1 💉:2 oder :tank: : 1",
-)
-@app_commands.choices(art=ART_CHOICES)
-@bot.tree.command(name="event_create", description="Alias für /event (Event erstellen)")
-async def event_create(
-    interaction: discord.Interaction,
-    art: app_commands.Choice[str],
-    zweck: str,
-    ort: str,
-    datum: str,
-    zeit: str,
-    slots: str,
-    level: int,
-    gruppenlead: Optional[str] = None,
-    treffpunkt: Optional[str] = None,
-    auto_delete: Optional[str] = None,
-    anmerkung: Optional[str] = None,
-):
-    return await event(
-        interaction=interaction,
-        art=art,
-        zweck=zweck,
-        ort=ort,
-        datum=datum,
-        zeit=zeit,
-        slots=slots,
-        level=level,
-        gruppenlead=gruppenlead,
-        treffpunkt=treffpunkt,
-        auto_delete=auto_delete,
-        anmerkung=anmerkung,
-    )
 @app_commands.describe(
     event="Event auswählen",
     ort="Neuer Ort (optional)",
@@ -816,22 +713,20 @@ async def event_edit(
     if interaction.guild is None:
         await interaction.response.send_message("❌ Nur auf einem Server nutzbar.", ephemeral=True)
         return
-    await interaction.response.defer(ephemeral=True)
-
 
     ev = active_events.get(str(event))
     if not ev:
-        await interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True)
+        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
         return
     if not can_edit_event(interaction, ev):
-        await interaction.followup.send("❌ Nicht erlaubt (nur Ersteller/Admin).", ephemeral=True)
+        await interaction.response.send_message("❌ Nicht erlaubt (nur Ersteller/Admin).", ephemeral=True)
         return
 
     # read current header from message so we can strike-through like before
     msg_id = int(event)
     msg = await fetch_message(interaction.guild, ev["channel_id"], msg_id)
     if not msg:
-        await interaction.followup.send("❌ Event-Post nicht gefunden.", ephemeral=True)
+        await interaction.response.send_message("❌ Event-Post nicht gefunden.", ephemeral=True)
         return
     header_text = msg.content.split("\n\n", 1)[0]
 
@@ -853,13 +748,13 @@ async def event_edit(
         if datum:
             d0 = parse_date_flexible(datum, now_local=datetime.now(TZ))
             if not d0:
-                await interaction.followup.send("❌ Ungültiges Datum.", ephemeral=True)
+                await interaction.response.send_message("❌ Ungültiges Datum.", ephemeral=True)
                 return
             cur_local = cur_local.replace(year=d0.year, month=d0.month, day=d0.day)
         if zeit:
             hm = _parse_time_hhmm(zeit)
             if not hm:
-                await interaction.followup.send("❌ Ungültige Zeit (HH:MM).", ephemeral=True)
+                await interaction.response.send_message("❌ Ungültige Zeit (HH:MM).", ephemeral=True)
                 return
             cur_local = cur_local.replace(hour=hm[0], minute=hm[1])
         new_utc = _ensure_utc(cur_local.astimezone(pytz.utc))
@@ -873,13 +768,10 @@ async def event_edit(
 
     # Slots (mit Erhalt der bestehenden Anmeldungen)
     if slots is not None:
-        new_slots_dict = _parse_slots_spec(slots, interaction.guild)
-        if not new_slots_dict:
-            await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
+        new_slots = parse_slots(slots)
+        if not new_slots:
+            await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
             return
-        # event state stores only the numeric limits + signup lists
-        new_slots = {k: int(v.get("limit", 0)) for k, v in new_slots_dict.items()}
-        
 
         old_slots = ev.get("slots", {})
         updated_slots = {}
@@ -900,7 +792,7 @@ async def event_edit(
                     not_removable.append(ok)
 
         if not_removable:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable),
                 ephemeral=True,
             )
@@ -974,7 +866,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = interaction.guild.get_thread(int(tid))
+                    thread = guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -992,7 +884,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = interaction.guild.get_thread(int(tid))
+                    thread = guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -1000,7 +892,7 @@ async def event_edit(
                 if thread:
                     lines = []
                     for emo, uid in promoted:
-                        member = interaction.guild.get_member(int(uid))
+                        member = guild.get_member(int(uid))
                         name = member.display_name if member else f"<@{uid}>"
                         lines.append(f"{emo} → {name}")
                     if lines:
@@ -1059,7 +951,7 @@ async def event_edit(
     # Mindestlevel
     if level is not None:
         if level < 1 or level > 100:
-            await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+            await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
             return
         old_lvl = ev.get("min_level")
         ev["min_level"] = int(level)
@@ -1094,7 +986,7 @@ async def event_edit(
     try:
         await msg.edit(content=content)
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
         return
 
     # post changes to thread
@@ -1109,7 +1001,7 @@ async def event_edit(
         except Exception:
             pass
 
-    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
 @app_commands.describe(
     mode="AFK-Check an/aus",
@@ -1350,33 +1242,28 @@ async def test_cmd(interaction: discord.Interaction):
 # -------------------- Event Delete (nur eigene) --------------------
 
 async def event_delete_autocomplete(interaction: discord.Interaction, current: str):
-    try:
-        """Autocomplete: normal nur eigene Events; Admins alle."""
-        res = []
-        if interaction.guild is None:
-            return res
-        guild_id = interaction.guild.id
-        uid = interaction.user.id
-
-        isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
-        for mid_s, ev in list(active_events.items()):
-            if int(ev.get("guild_id", 0)) != int(guild_id):
-                continue
-            if (not isadm) and int(ev.get("creator_id", 0)) != int(uid):
-                continue
-            title = ev.get("title", "Event")
-            when = format_dt_local(ev.get("event_time_utc"))
-            label = f"{title} ({when})"
-            if current and current.lower() not in label.lower():
-                continue
-            res.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
-            if len(res) >= 25:
-                break
+    """Autocomplete: normal nur eigene Events; Admins alle."""
+    res = []
+    if interaction.guild is None:
         return res
-    except Exception as e:
-        print(f"⚠️ Autocomplete error in event_delete_autocomplete: {e!r}", flush=True)
-        return []
+    guild_id = interaction.guild.id
+    uid = interaction.user.id
 
+    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
+    for mid_s, ev in active_events.items():
+        if int(ev.get("guild_id", 0)) != int(guild_id):
+            continue
+        if (not isadm) and int(ev.get("creator_id", 0)) != int(uid):
+            continue
+        title = ev.get("title", "Event")
+        when = format_dt_local(ev.get("event_time_utc"))
+        label = f"{title} ({when})"
+        if current and current.lower() not in label.lower():
+            continue
+        res.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
+        if len(res) >= 25:
+            break
+    return res
 
 class ConfirmDeleteView(discord.ui.View):
     def __init__(self, *, timeout: int = 30):
@@ -1778,25 +1665,25 @@ async def cleanup_task():
 
         await asyncio.sleep(60)
 
-
 @bot.event
 async def on_ready():
-    # Sync commands fast per guild (global sync can take a while and may rate-limit)
-    total = 0
-    for g in list(bot.guilds):
-        try:
-            bot.tree.copy_global_to(guild=g)
-            synced = await asyncio.wait_for(bot.tree.sync(guild=g), timeout=30)
-            total += len(synced)
-            print(f"✅ Slash Commands synchronisiert für Guild: {g.name} ({g.id}) – {len(synced)}", flush=True)
-        except asyncio.TimeoutError:
-            print(f"⚠️ Slash Sync Timeout für Guild: {g.name} ({g.id})", flush=True)
-        except Exception as e:
-            print(f"⚠️ Slash Sync Fehler für Guild {g.id}: {e!r}", flush=True)
-
-    print(f"🤖 SlotBot online als {bot.user} | Guilds: {len(bot.guilds)} | Synced: {total}", flush=True)
-
+    try:
+        # Schnellere Command-Aktivierung: pro Guild syncen
+        for g in bot.guilds:
+            try:
+                await bot.tree.sync(guild=g)
+            except Exception:
+                pass
+    except Exception:
+        pass
     global TASKS_STARTED
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} Slash Commands global synchronisiert")
+    except Exception as e:
+        print(f"❌ Slash Sync Fehler: {e}")
+    print(f"🤖 SlotBot online als {bot.user}")
+
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
@@ -1805,195 +1692,8 @@ async def on_ready():
         TASKS_STARTED = True
 
 # -------------------- Main --------------------
-# -------------------- Main --------------------
-
-
-# -------------------- Main (Render Web Service) --------------------
-# Render requires an open port -> Flask must start immediately.
-
-import asyncio
-
-def start_flask_thread():
-    try:
-        threading.Thread(target=run_flask, daemon=True).start()
-        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{PORT}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Flask thread start failed: {e!r}", flush=True)
-
-async def _ensure_http_session():
-    """discord.py can end up with a closed aiohttp session after failed login attempts.
-    Recreate it defensively before each new start attempt."""
-    try:
-        http = getattr(bot, "http", None)
-        if not http:
-            return
-        sess = getattr(http, "_HTTPClient__session", None)
-        if sess is None or getattr(sess, "closed", True):
-            http._HTTPClient__session = aiohttp.ClientSession()
-    except Exception:
-        pass
-
-async def _safe_close():
-    try:
-        await bot.close()
-    except Exception:
-        pass
-    try:
-        http = getattr(bot, "http", None)
-        sess = getattr(http, "_HTTPClient__session", None) if http else None
-        if sess and not sess.closed:
-            await sess.close()
-    except Exception:
-        pass
-
-async def run_bot_forever():
-    backoff = 15
-    max_backoff = 600  # 10 min
-    while True:
-        try:
-            await _ensure_http_session()
-            print("🔐 Discord login…", flush=True)
-            await bot.start(DISCORD_TOKEN, reconnect=True)
-            backoff = 15
-        except discord.HTTPException as e:
-            if getattr(e, "status", None) == 429:
-                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…", flush=True)
-                await _safe_close()
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
-                continue
-            print(f"❌ Discord HTTPException: {e!r}", flush=True)
-            await _safe_close()
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
-            continue
-        except RuntimeError as e:
-            if "Session is closed" in str(e):
-                print(f"⚠️ RuntimeError('Session is closed'). Sleeping {backoff}s and retrying…", flush=True)
-                await _safe_close()
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
-                continue
-            print(f"❌ RuntimeError: {e!r}", flush=True)
-            await _safe_close()
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
-            continue
-        except discord.LoginFailure:
-            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
-            await _safe_close()
-            return
-        except Exception as e:
-            print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}", flush=True)
-            await _safe_close()
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
-            continue
-        finally:
-            await _safe_close()
-
-# -------------------------
-# Robust Web Service runner
-# -------------------------
-import os, sys, time, asyncio, threading
-try:
-    import fcntl  # Render/Linux
-except Exception:
-    fcntl = None
-
-def _start_flask_healthcheck():
-    """Bind to $PORT so Render detects an open port (Web Service)."""
-    try:
-        port = int(os.environ.get("PORT", "10000"))
-    except Exception:
-        port = 10000
-    try:
-        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{port}", flush=True)
-        flask_flask_app.run(host="0.0.0.0", port=port)
-    except Exception as e:
-        print(f"❌ Flask failed to start: {e!r}", flush=True)
-
-def _acquire_single_instance_lock():
-    """Prevent accidental double-starts inside the same container."""
-    if fcntl is None:
-        return None
-    lock_path = "/tmp/slotbot.lock"
-    lock_file = open(lock_path, "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("⚠️ Another SlotBot instance is already running in this container. Exiting.", flush=True)
-        sys.exit(0)
-    return lock_file  # keep open forever
-
-async def _close_http_session_safely():
-    """Close bot and underlying aiohttp session best-effort (avoids 'Unclosed client session')."""
-    try:
-        await bot.close()
-    except Exception:
-        pass
-    try:
-        http = getattr(bot, "http", None)
-        sess = getattr(http, "_HTTPClient__session", None) if http else None
-        if sess and not sess.closed:
-            await sess.close()
-    except Exception:
-        pass
-
-def _hard_restart_process():
-    """Hard restart to fully reset discord.py/aiohttp state."""
-    print("🔁 Hard-restarting process to reset session state…", flush=True)
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
-async def _run_bot_forever():
-    backoff = 60
-    max_backoff = 900  # 15 minutes
-    while True:
-        try:
-            print("🔐 Discord login…", flush=True)
-            await bot.start(DISCORD_TOKEN, reconnect=True)
-            backoff = 60
-        except discord.LoginFailure:
-            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
-            await _close_http_session_safely()
-            return
-        except discord.HTTPException as e:
-            status = getattr(e, "status", None)
-            if status == 429:
-                wait_s = min(backoff, max_backoff)
-                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {wait_s}s (no spam)…", flush=True)
-                await _close_http_session_safely()
-                time.sleep(wait_s)
-                _hard_restart_process()
-            wait_s = min(backoff, max_backoff)
-            print(f"❌ Discord HTTPException: {e!r} — sleeping {wait_s}s", flush=True)
-            await _close_http_session_safely()
-            await asyncio.sleep(wait_s)
-            backoff = min(backoff * 2, max_backoff)
-        except RuntimeError as e:
-            if "Session is closed" in str(e):
-                wait_s = min(backoff, max_backoff)
-                print(f"⚠️ RuntimeError('Session is closed'). Sleeping {wait_s}s and restarting…", flush=True)
-                await _close_http_session_safely()
-                time.sleep(wait_s)
-                _hard_restart_process()
-            wait_s = min(backoff, max_backoff)
-            print(f"❌ RuntimeError: {e!r} — sleeping {wait_s}s", flush=True)
-            await _close_http_session_safely()
-            await asyncio.sleep(wait_s)
-            backoff = min(backoff * 2, max_backoff)
-        except Exception as e:
-            wait_s = min(backoff, max_backoff)
-            print(f"❌ Bot runner error: {e!r} — sleeping {wait_s}s", flush=True)
-            await _close_http_session_safely()
-            await asyncio.sleep(wait_s)
-            backoff = min(backoff * 2, max_backoff)
-        finally:
-            await _close_http_session_safely()
 
 if __name__ == "__main__":
-    _lock = _acquire_single_instance_lock()
-    t = threading.Thread(target=_start_flask_healthcheck, daemon=True)
-    t.start()
-    asyncio.run(_run_bot_forever())
-
+    print("🚀 Starte SlotBot (rebuilt) + Flask ...")
+    threading.Thread(target=run_flask, daemon=True).start()
+    bot.run(DISCORD_TOKEN)
