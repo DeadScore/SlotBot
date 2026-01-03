@@ -1801,15 +1801,30 @@ async def on_ready():
 # --- Resilient runner to avoid crash-loops on Discord global rate limits (HTTP 429) ---
 import asyncio
 
+async def _ensure_http_session():
+    """discord.py can end up with a closed aiohttp session after failed logins.
+    Recreate it defensively so the next login attempt doesn't crash with 'Session is closed'.
+    """
+    try:
+        import aiohttp  # type: ignore
+        sess = getattr(getattr(bot, "http", None), "_HTTPClient__session", None)
+        if sess is None or getattr(sess, "closed", False):
+            setattr(bot.http, "_HTTPClient__session", aiohttp.ClientSession())
+    except Exception:
+        pass
+
 async def _run_bot_forever():
     backoff = 5
     max_backoff = 300  # 5 minutes
     while True:
         try:
+            await _ensure_http_session()
             print("🔐 Discord login…", flush=True)
             await bot.start(DISCORD_TOKEN, reconnect=True)
+            # If bot.start() ever returns (it normally shouldn't), wait a bit and retry.
+            await asyncio.sleep(5)
+            backoff = 5
         except discord.HTTPException as e:
-            # Discord global rate limit / temporary block
             status = getattr(e, "status", None)
             if status == 429:
                 print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…", flush=True)
@@ -1823,17 +1838,26 @@ async def _run_bot_forever():
         except discord.LoginFailure:
             print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
             return
+        except RuntimeError as e:
+            # Happens after rate-limited/failed logins if aiohttp session got closed.
+            if "Session is closed" in str(e):
+                print("⚠️ aiohttp session closed; recreating session and retrying…", flush=True)
+                try:
+                    await _ensure_http_session()
+                except Exception:
+                    pass
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+                continue
+            print(f"❌ RuntimeError im Bot-Runner: {e!r}", flush=True)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+            continue
         except Exception as e:
             print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}", flush=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
             continue
-        finally:
-            # Ensure clean close between retries
-            try:
-                await bot.close()
-            except Exception:
-                pass
 
 if __name__ == "__main__":
     # Start Flask healthcheck server for Render port detection
