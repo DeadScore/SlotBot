@@ -1805,7 +1805,15 @@ async def _run_bot_forever():
                 pass
 
 if __name__ == "__main__":
-    # Flask (Render health check) runs in a thread; bot runs on the main asyncio loop.
+    # Start Flask healthcheck server for Render port detection
+    try:
+        t = threading.Thread(target=run_flask, daemon=True)
+        t.start()
+        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{PORT}")
+    except Exception as e:
+        print(f"⚠️ Konnte Flask nicht starten: {e!r}")
+
+    # Run Discord bot with backoff (avoid crash-loops on HTTP 429)
     try:
         asyncio.run(_run_bot_forever())
     except KeyboardInterrupt:
