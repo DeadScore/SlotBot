@@ -582,26 +582,31 @@ def _build_event_title(art: str, zweck: str) -> str:
     return f"{art}: {z}"
 
 async def _event_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    gid = interaction.guild_id
-    if not gid:
+    try:
+        gid = interaction.guild_id
+        if not gid:
+            return []
+        current_l = (current or "").lower()
+        items = []
+        for mid_s, ev in list(active_events.items()):
+            if safe_int(ev.get("guild_id")) != gid:
+                continue
+            # only creator/admin can see
+            if not can_edit_event(interaction, ev):
+                continue
+            name = ev.get("title", f"Event {mid_s}")
+            if current_l and current_l not in name.lower():
+                continue
+            # include message id for uniqueness
+            label = f"{name} (#{mid_s[-6:]})"
+            items.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
+            if len(items) >= 25:
+                break
+        return items
+    except Exception as e:
+        print(f"⚠️ Autocomplete error in _event_autocomplete: {e!r}", flush=True)
         return []
-    current_l = (current or "").lower()
-    items = []
-    for mid_s, ev in active_events.items():
-        if safe_int(ev.get("guild_id")) != gid:
-            continue
-        # only creator/admin can see
-        if not can_edit_event(interaction, ev):
-            continue
-        name = ev.get("title", f"Event {mid_s}")
-        if current_l and current_l not in name.lower():
-            continue
-        # include message id for uniqueness
-        label = f"{name} (#{mid_s[-6:]})"
-        items.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
-        if len(items) >= 25:
-            break
-    return items
+
 
 @app_commands.describe(
     art="Event-Art",
@@ -1345,28 +1350,33 @@ async def test_cmd(interaction: discord.Interaction):
 # -------------------- Event Delete (nur eigene) --------------------
 
 async def event_delete_autocomplete(interaction: discord.Interaction, current: str):
-    """Autocomplete: normal nur eigene Events; Admins alle."""
-    res = []
-    if interaction.guild is None:
-        return res
-    guild_id = interaction.guild.id
-    uid = interaction.user.id
+    try:
+        """Autocomplete: normal nur eigene Events; Admins alle."""
+        res = []
+        if interaction.guild is None:
+            return res
+        guild_id = interaction.guild.id
+        uid = interaction.user.id
 
-    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
-    for mid_s, ev in active_events.items():
-        if int(ev.get("guild_id", 0)) != int(guild_id):
-            continue
-        if (not isadm) and int(ev.get("creator_id", 0)) != int(uid):
-            continue
-        title = ev.get("title", "Event")
-        when = format_dt_local(ev.get("event_time_utc"))
-        label = f"{title} ({when})"
-        if current and current.lower() not in label.lower():
-            continue
-        res.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
-        if len(res) >= 25:
-            break
-    return res
+        isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
+        for mid_s, ev in list(active_events.items()):
+            if int(ev.get("guild_id", 0)) != int(guild_id):
+                continue
+            if (not isadm) and int(ev.get("creator_id", 0)) != int(uid):
+                continue
+            title = ev.get("title", "Event")
+            when = format_dt_local(ev.get("event_time_utc"))
+            label = f"{title} ({when})"
+            if current and current.lower() not in label.lower():
+                continue
+            res.append(app_commands.Choice(name=label[:100], value=str(mid_s)))
+            if len(res) >= 25:
+                break
+        return res
+    except Exception as e:
+        print(f"⚠️ Autocomplete error in event_delete_autocomplete: {e!r}", flush=True)
+        return []
+
 
 class ConfirmDeleteView(discord.ui.View):
     def __init__(self, *, timeout: int = 30):
