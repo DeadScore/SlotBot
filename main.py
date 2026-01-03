@@ -170,8 +170,6 @@ def format_dt_local(dt_utc) -> str:
     return dt_local.strftime("%d.%m.%Y %H:%M")
 
 
-    return dt_local.strftime("%d.%m.%Y %H:%M")
-
 def safe_int(x, default=None):
     try:
         return int(x)
@@ -686,124 +684,174 @@ async def event_create(
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
 
-@app_commands.describe(
-    event="Event auswählen",
-    ort="Neuer Ort (optional)",
-    treffpunkt="Neuer Treffpunkt (optional)",
-    datum="Neues Datum (optional)",
-    zeit="Neue Zeit (optional)",
-    gruppenlead="Neuer Gruppenlead (optional)",
-    anmerkung="Neue Anmerkung (optional)",
-    level="Neues Mindestlevel (z.B. 61)"
-)
-@bot.tree.command(name="event_edit", description="Bearbeitet ein Event (nur Ersteller/Admin)")
-@app_commands.autocomplete(event=_event_autocomplete)
-async def event_edit(
-    interaction: discord.Interaction,
-    event: str,
-    ort: Optional[str] = None,
-    treffpunkt: Optional[str] = None,
-    datum: Optional[str] = None,
-    zeit: Optional[str] = None,
-    slots: Optional[str] = None,
-    gruppenlead: Optional[str] = None,
-    level: Optional[int] = None,
-    anmerkung: Optional[str] = None,
-):
+@bot.tree.command(name="event_edit", description="Bearbeitet ein Event (Select + Modal, nur Ersteller/Admin)")
+async def event_edit(interaction: discord.Interaction):
+    """Neue UX: Event auswählen per SelectMenu, danach editieren per Modals."""
     if interaction.guild is None:
         await interaction.response.send_message("❌ Nur auf einem Server nutzbar.", ephemeral=True)
         return
 
-    ev = active_events.get(str(event))
+    # Build selectable events (visible only to creator/admin)
+    choices = []
+    gid = interaction.guild.id
+    for mid_s, ev in active_events.items():
+        if safe_int(ev.get("guild_id")) != gid:
+            continue
+        if not can_edit_event(interaction, ev):
+            continue
+        title = ev.get("title", f"Event {mid_s}")
+        when = format_dt_local(ev.get("event_time_utc"))
+        label = f"{title} ({when})"
+        choices.append((label[:100], str(mid_s)))
+
+    if not choices:
+        await interaction.response.send_message("🫠 Ich finde keine Events, die du bearbeiten darfst.", ephemeral=True)
+        return
+
+    view = EventEditView(interaction.user.id, choices)
+    await interaction.response.send_message("Wähle ein Event aus:", ephemeral=True, view=view)
+
+
+# ---------- Event Edit UI (Select + Modals) ----------
+
+class EventSelect(discord.ui.Select):
+    def __init__(self, choices: list[tuple[str, str]]):
+        options = [discord.SelectOption(label=lbl, value=val) for (lbl, val) in choices[:25]]
+        super().__init__(placeholder="Event auswählen…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: EventEditView = self.view  # type: ignore
+        if not view or interaction.user.id != view.owner_user_id:
+            await interaction.response.send_message("❌ Das ist nicht dein Menü.", ephemeral=True)
+            return
+
+        view.selected_event_id = self.values[0]
+        ev = active_events.get(view.selected_event_id)
+        if not ev:
+            await interaction.response.send_message("❌ Event nicht gefunden (evtl. gelöscht).", ephemeral=True)
+            return
+
+        title = ev.get("title", "Event")
+        await interaction.response.edit_message(
+            content=f"✅ Ausgewählt: **{title}**\nWas willst du ändern?",
+            view=view,
+        )
+
+
+class BaseEditModal(discord.ui.Modal):
+    def __init__(self, title: str, event_id: str):
+        super().__init__(title=title)
+        self.event_id = event_id
+
+
+async def _apply_event_update(interaction: discord.Interaction, event_id: str, **kwargs):
+    """Apply updates to event dict, persist, update post, post changes to thread."""
+    if interaction.guild is None:
+        return False, "❌ Nur auf einem Server."
+
+    ev = active_events.get(str(event_id))
     if not ev:
-        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
-        return
+        return False, "❌ Event nicht gefunden."
     if not can_edit_event(interaction, ev):
-        await interaction.response.send_message("❌ Nicht erlaubt (nur Ersteller/Admin).", ephemeral=True)
-        return
-
-    # read current header from message so we can strike-through like before
-    msg_id = int(event)
-    msg = await fetch_message(interaction.guild, ev["channel_id"], msg_id)
-    if not msg:
-        await interaction.response.send_message("❌ Event-Post nicht gefunden.", ephemeral=True)
-        return
-    header_text = msg.content.split("\n\n", 1)[0]
-
-    PREFIX_TIME = "🗓️ **Zeit:**"
-    PREFIX_ORT = "📍 **Ort:**"
-    PREFIX_TREFF = "📌 **Treffpunkt:**"
-    PREFIX_LEAD = "👑 **Gruppenlead:**"
-    PREFIX_NOTE = "📝 **Anmerkung:**"
+        return False, "❌ Nicht erlaubt (nur Ersteller/Admin)."
 
     changes = []
 
-    # time
-    dt_utc = datetime.fromisoformat(ev["event_time_utc"])
-    dt_utc = _ensure_utc(dt_utc)
+    # Time update via (datum, zeit)
+    if "datum" in kwargs or "zeit" in kwargs:
+        datum = kwargs.get("datum")
+        zeit = kwargs.get("zeit")
+        try:
+            dt_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+        except Exception:
+            dt_utc = _now_utc()
 
-    if datum or zeit:
-        # keep existing local date/time unless changed
         cur_local = dt_utc.astimezone(TZ)
         if datum:
             d0 = parse_date_flexible(datum, now_local=datetime.now(TZ))
             if not d0:
-                await interaction.response.send_message("❌ Ungültiges Datum.", ephemeral=True)
-                return
+                return False, "❌ Ungültiges Datum."
             cur_local = cur_local.replace(year=d0.year, month=d0.month, day=d0.day)
         if zeit:
             hm = _parse_time_hhmm(zeit)
             if not hm:
-                await interaction.response.send_message("❌ Ungültige Zeit (HH:MM).", ephemeral=True)
-                return
+                return False, "❌ Ungültige Zeit (HH:MM)."
             cur_local = cur_local.replace(hour=hm[0], minute=hm[1])
+
         new_utc = _ensure_utc(cur_local.astimezone(pytz.utc))
-        old_val = extract_current_value(header_text, PREFIX_TIME) or format_dt_local(dt_utc)
-        new_val = format_dt_local(new_utc)
-        header_text = replace_with_struck(header_text, PREFIX_TIME, old_val, new_val)
         ev["event_time_utc"] = new_utc.isoformat()
-        changes.append(f"Zeit: ~~{old_val}~~ → {new_val}")
-        dt_utc = new_utc
+        changes.append(f"Zeit: {format_dt_local(dt_utc)} → {format_dt_local(new_utc)}")
 
+    # Simple string fields
+    for key, label in [
+        ("ort", "Ort"),
+        ("treffpunkt", "Treffpunkt"),
+        ("gruppenlead", "Gruppenlead"),
+        ("anmerkung", "Anmerkung"),
+    ]:
+        if key in kwargs:
+            val = (kwargs.get(key) or "").strip()
+            old = (ev.get(key) or "")
+            if val == "":
+                if ev.get(key) is not None:
+                    ev[key] = None
+                    changes.append(f"{label}: entfernt")
+            else:
+                ev[key] = val
+                if old.strip() != val:
+                    changes.append(f"{label}: {old or '—'} → {val}")
 
-    # Slots (mit Erhalt der bestehenden Anmeldungen)
-    if slots is not None:
-        new_slots = parse_slots(slots)
-        if not new_slots:
-            await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
-            return
+    # Level
+    if "level" in kwargs and kwargs["level"] is not None:
+        lvl = int(kwargs["level"])
+        if lvl < 1 or lvl > 100:
+            return False, "❌ Level muss zwischen 1 und 100 liegen."
+        old = ev.get("min_level")
+        ev["min_level"] = lvl
+        if old != lvl:
+            changes.append(f"Mindestlevel: {int(old or 0)}+ → {lvl}+")
+
+    # Auto delete
+    if "auto_delete" in kwargs and kwargs["auto_delete"] is not None:
+        mode = kwargs["auto_delete"].strip().lower()
+        if mode not in ("on", "off"):
+            return False, "❌ auto_delete akzeptiert nur `on` oder `off`."
+        if mode == "off":
+            ev["auto_delete_hours"] = None
+            changes.append("Auto-Delete: off")
+        else:
+            ev["auto_delete_hours"] = AUTO_DELETE_HOURS_DEFAULT
+            changes.append(f"Auto-Delete: on ({AUTO_DELETE_HOURS_DEFAULT}h)")
+
+    # Slots (keep existing signups)
+    if "slots" in kwargs and kwargs["slots"] is not None:
+        spec = kwargs["slots"].strip()
+        new_slots_dict = _parse_slots_spec(spec, interaction.guild)
+        if not new_slots_dict:
+            return False, "❌ Ungültige Slot-Definition. Beispiel: `⚔️:3 🛡️:1 💉:2`"
 
         old_slots = ev.get("slots", {})
-        updated_slots = {}
+        updated_slots: Dict[str, dict] = {}
 
         def _n(x: str) -> str:
-            try:
-                return _normalize_emoji(x)
-            except Exception:
-                return str(x)
+            return _normalize_emoji(str(x))
 
         old_by_norm = {_n(k): k for k in old_slots.keys()}
+        new_norms = {_n(k) for k in new_slots_dict.keys()}
 
-        new_norms = {_n(k) for k in new_slots.keys()}
+        # Prevent removing non-empty slots
         not_removable = []
         for ok, oslot in old_slots.items():
             if _n(ok) not in new_norms:
                 if list(oslot.get("main", [])) or list(oslot.get("waitlist", [])):
                     not_removable.append(ok)
-
         if not_removable:
-            await interaction.response.send_message(
-                "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable),
-                ephemeral=True,
-            )
-            return
+            return False, "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable)
 
         slot_lines = []
-        overflow_notes = []
-        overflow_moved: Dict[str, int] = {}
 
-        for nk, nlimit in new_slots.items():
-            nlimit = int(nlimit)
+        for nk, nslot in new_slots_dict.items():
+            nlimit = int(nslot.get("limit", 0))
             ok = old_by_norm.get(_n(nk))
             if ok is not None:
                 oslot = old_slots.get(ok, {})
@@ -817,26 +865,51 @@ async def event_edit(
                     mains = mains[:nlimit]
                     wl = overflow + wl
                     moved = len(overflow)
-                    overflow_moved[nk] = moved
 
-                updated_slots[nk] = {"limit": nlimit, "main": mains, "waitlist": wl}
-
+                updated_slots[nk] = {"label": nslot.get("label","Slot"), "limit": nlimit, "main": mains, "waitlist": wl}
                 if old_limit != nlimit:
                     line = f"{nk}: {old_limit} → {nlimit}"
                     if moved:
                         line += f" (⚠️ {moved} auf Warteliste)"
                     slot_lines.append(line)
             else:
-                updated_slots[nk] = {"limit": nlimit, "main": [], "waitlist": []}
+                updated_slots[nk] = {"label": nslot.get("label","Slot"), "limit": nlimit, "main": [], "waitlist": []}
                 slot_lines.append(f"{nk}: neu ({nlimit})")
 
-        # Entfernte Slots (nur möglich, wenn leer)
+        # Removed slots (must be empty)
         for ok in old_slots.keys():
             if _n(ok) not in new_norms:
                 slot_lines.append(f"{ok}: entfernt")
 
         ev["slots"] = updated_slots
 
+        # Keep reactions in sync (avoid "fake unsub" spam)
+        try:
+            ev["suppress_unsub_until"] = time.time() + 15
+            active_events[str(event_id)] = ev
+            await safe_save()
+        except Exception:
+            pass
+
+        try:
+            # Add new reactions
+            msg = await fetch_message(interaction.guild, int(ev["channel_id"]), int(event_id))
+            if msg:
+                for ek in updated_slots.keys():
+                    try:
+                        await msg.add_reaction(ek)
+                    except Exception:
+                        pass
+                for ok in old_slots.keys():
+                    if _n(ok) not in new_norms:
+                        try:
+                            await msg.clear_reaction(ok)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        promoted = []
         try:
             promoted = _slot_promote_waitlist(ev)
         except Exception:
@@ -845,163 +918,194 @@ async def event_edit(
         if slot_lines:
             changes.append("Slots: " + ", ".join(slot_lines))
 
-
+        # Thread info
         try:
-            for ek in updated_slots.keys():
-                try:
-                    await msg.add_reaction(ek)
-                except Exception:
-                    pass
-            for ok in old_slots.keys():
-                if _n(ok) not in new_norms:
-                    try:
-                        await msg.clear_reaction(ok)
-                    except Exception:
-                        pass
+            await post_to_event_thread(interaction.guild, ev, "🛠️ **Slots angepasst:**\n" + "\n".join(f"• {x}" for x in slot_lines))
+            if promoted:
+                await post_to_event_thread(interaction.guild, ev, "\n".join([f"🔄 Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
         except Exception:
             pass
 
-        if slot_lines:
-            try:
-                tid = ev.get("thread_id")
-                thread = None
-                if tid:
-                    thread = guild.get_thread(int(tid))
-                    if thread is None:
-                        ch = await bot.fetch_channel(int(tid))
-                        if isinstance(ch, discord.Thread):
-                            thread = ch
-                if thread:
-                    pretty = "\n".join(f"• {x}" for x in slot_lines)
-                    await thread.send("🛠️ **Slots angepasst:**\n" + pretty)
-            except Exception:
-                pass
-
-
-
-        if promoted:
-            try:
-                tid = ev.get("thread_id")
-                thread = None
-                if tid:
-                    thread = guild.get_thread(int(tid))
-                    if thread is None:
-                        ch = await bot.fetch_channel(int(tid))
-                        if isinstance(ch, discord.Thread):
-                            thread = ch
-                if thread:
-                    lines = []
-                    for emo, uid in promoted:
-                        member = guild.get_member(int(uid))
-                        name = member.display_name if member else f"<@{uid}>"
-                        lines.append(f"{emo} → {name}")
-                    if lines:
-                        await thread.send("🔄 **Nachgerückt:**\n" + "\n".join(f"• {x}" for x in lines))
-            except Exception:
-                pass
-
-    # Ort
-    if ort is not None:
-        new = ort.strip()
-        old = extract_current_value(header_text, PREFIX_ORT) or (ev.get("ort") or "-")
-        header_text = replace_with_struck(header_text, PREFIX_ORT, old, new)
-        ev["ort"] = new
-        changes.append(f"Ort: ~~{old}~~ → {new}")
-
-    # Treffpunkt (and keep "Ort updated" in the header text flow — same strike behavior)
-    if treffpunkt is not None:
-        tp = treffpunkt.strip()
-        if tp == "":
-            # remove line entirely
-            header_text = re.sub(rf"^{re.escape(PREFIX_TREFF)}.*\n?", "", header_text, flags=re.M)
-            ev["treffpunkt"] = None
-            changes.append("Treffpunkt entfernt")
-        else:
-            old = extract_current_value(header_text, PREFIX_TREFF) or (ev.get("treffpunkt") or "-")
-            if re.search(rf"^{re.escape(PREFIX_TREFF)}", header_text, re.M):
-                header_text = replace_with_struck(header_text, PREFIX_TREFF, old, tp)
-            else:
-                # insert after Ort line
-                header_text = re.sub(
-                    rf"^{re.escape(PREFIX_ORT)}.*$",
-                    lambda m: m.group(0) + f"\n{PREFIX_TREFF} {tp}",
-                    header_text,
-                    flags=re.M,
-                    count=1,
-                )
-            ev["treffpunkt"] = tp
-            changes.append(f"Treffpunkt: ~~{old}~~ → {tp}")
-
-    # Gruppenlead
-    if gruppenlead is not None:
-        gl = gruppenlead.strip()
-        if gl == "":
-            header_text = re.sub(rf"^{re.escape(PREFIX_LEAD)}.*\n?", "", header_text, flags=re.M)
-            ev["gruppenlead"] = None
-            changes.append("Gruppenlead entfernt")
-        else:
-            old = extract_current_value(header_text, PREFIX_LEAD) or (ev.get("gruppenlead") or "-")
-            if re.search(rf"^{re.escape(PREFIX_LEAD)}", header_text, re.M):
-                header_text = replace_with_struck(header_text, PREFIX_LEAD, old, gl)
-            else:
-                header_text = header_text.replace("─────────────────────────────────", f"{PREFIX_LEAD} {gl}\n─────────────────────────────────", 1)
-            ev["gruppenlead"] = gl
-            changes.append(f"Gruppenlead: ~~{old}~~ → {gl}")
-
-    # Mindestlevel
-    if level is not None:
-        if level < 1 or level > 100:
-            await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
-            return
-        old_lvl = ev.get("min_level")
-        ev["min_level"] = int(level)
-        if old_lvl is None:
-            changes.append(f"Mindestlevel: {int(level)}+")
-        else:
-            changes.append(f"Mindestlevel: ~~{int(old_lvl)}+~~ → {int(level)}+")
-
-    # Anmerkung
-    if anmerkung is not None:
-        an = anmerkung.strip()
-        if an == "":
-            header_text = re.sub(rf"^{re.escape(PREFIX_NOTE)}.*\n?", "", header_text, flags=re.M)
-            ev["anmerkung"] = None
-            changes.append("Anmerkung entfernt")
-        else:
-            old = extract_current_value(header_text, PREFIX_NOTE) or (ev.get("anmerkung") or "-")
-            if re.search(rf"^{re.escape(PREFIX_NOTE)}", header_text, re.M):
-                header_text = replace_with_struck(header_text, PREFIX_NOTE, old, an)
-            else:
-                header_text = header_text.replace("─────────────────────────────────", f"{PREFIX_NOTE} {an}\n─────────────────────────────────", 1)
-            ev["anmerkung"] = an
-            changes.append(f"Anmerkung: ~~{old}~~ → {an}")
-
-    # Apply updated content
-    active_events[_event_key(msg_id)] = ev
+    # Persist and update main post
+    active_events[str(event_id)] = ev
     await safe_save()
 
-    # rebuild full post from ev (but keep the strike-through header the user wants)
-    slots_text = build_slots_text(ev)
-    content = header_text + "\n\n" + slots_text + "\n\nReagiere mit dem passenden Emoji um dich einzutragen."
     try:
-        await msg.edit(content=content)
-    except Exception as e:
-        await interaction.response.send_message(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
-        return
-
-    # post changes to thread
-    thread = None
-    try:
-        thread = await get_or_create_thread(msg, ev)
+        await update_event_post(interaction.guild, int(event_id))
     except Exception:
-        thread = None
-    if thread and changes:
+        pass
+
+    # Post change summary into thread
+    if changes:
         try:
-            await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
+            await post_to_event_thread(interaction.guild, ev, "✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
         except Exception:
             pass
 
-    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
+    return True, "✅ Event aktualisiert."
+
+
+class EditLocationModal(BaseEditModal, title="Ort / Treffpunkt"):
+    ort = discord.ui.TextInput(label="Ort", required=False, max_length=100)
+    treffpunkt = discord.ui.TextInput(label="Treffpunkt", required=False, max_length=150)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ok, msg = await _apply_event_update(interaction, self.event_id, ort=str(self.ort), treffpunkt=str(self.treffpunkt))
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class EditTimeModal(BaseEditModal, title="Datum / Zeit"):
+    datum = discord.ui.TextInput(label="Datum (z.B. heute / morgen / 23.12.2025)", required=False, max_length=40)
+    zeit = discord.ui.TextInput(label="Zeit (HH:MM)", required=False, max_length=10)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ok, msg = await _apply_event_update(interaction, self.event_id, datum=str(self.datum).strip() or None, zeit=str(self.zeit).strip() or None)
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class EditMetaModal(BaseEditModal, title="Lead / Level / Anmerkung"):
+    gruppenlead = discord.ui.TextInput(label="Gruppenlead", required=False, max_length=100)
+    level = discord.ui.TextInput(label="Mindestlevel (1-100)", required=False, max_length=3)
+    anmerkung = discord.ui.TextInput(label="Anmerkung", required=False, max_length=200)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        lvl_txt = str(self.level).strip()
+        lvl = None
+        if lvl_txt:
+            try:
+                lvl = int(lvl_txt)
+            except Exception:
+                await interaction.response.send_message("❌ Level muss eine Zahl sein.", ephemeral=True)
+                return
+
+        ok, msg = await _apply_event_update(
+            interaction,
+            self.event_id,
+            gruppenlead=str(self.gruppenlead),
+            level=lvl,
+            anmerkung=str(self.anmerkung),
+        )
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class EditSlotsModal(BaseEditModal, title="Slots ändern"):
+    slots = discord.ui.TextInput(
+        label="Slots (z.B. ⚔️:3 🛡️:1 💉:2)",
+        required=True,
+        max_length=300,
+        placeholder="⚔️:3 🛡️:1 💉:2",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ok, msg = await _apply_event_update(interaction, self.event_id, slots=str(self.slots))
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class EventEditView(discord.ui.View):
+    def __init__(self, owner_user_id: int, choices: list[tuple[str, str]]):
+        super().__init__(timeout=180)
+        self.owner_user_id = owner_user_id
+        self.selected_event_id: Optional[str] = None
+        self.add_item(EventSelect(choices))
+
+    async def _ensure_selected(self, interaction: discord.Interaction) -> Optional[str]:
+        if interaction.user.id != self.owner_user_id:
+            await interaction.response.send_message("❌ Das ist nicht dein Menü.", ephemeral=True)
+            return None
+        if not self.selected_event_id:
+            await interaction.response.send_message("❌ Bitte zuerst ein Event auswählen.", ephemeral=True)
+            return None
+        if self.selected_event_id not in active_events:
+            await interaction.response.send_message("❌ Event nicht gefunden (evtl. gelöscht).", ephemeral=True)
+            return None
+        return self.selected_event_id
+
+    @discord.ui.button(label="Ort / Treffpunkt", style=discord.ButtonStyle.primary)
+    async def btn_location(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        await interaction.response.send_modal(EditLocationModal(event_id=eid))
+
+    @discord.ui.button(label="Datum / Zeit", style=discord.ButtonStyle.primary)
+    async def btn_time(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        await interaction.response.send_modal(EditTimeModal(event_id=eid))
+
+    @discord.ui.button(label="Lead / Level / Note", style=discord.ButtonStyle.secondary)
+    async def btn_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        await interaction.response.send_modal(EditMetaModal(event_id=eid))
+
+    @discord.ui.button(label="Slots", style=discord.ButtonStyle.secondary)
+    async def btn_slots(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        await interaction.response.send_modal(EditSlotsModal(event_id=eid))
+
+    @discord.ui.button(label="Auto-Delete: on", style=discord.ButtonStyle.success)
+    async def btn_autodel_on(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        ok, msg = await _apply_event_update(interaction, eid, auto_delete="on")
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @discord.ui.button(label="Auto-Delete: off", style=discord.ButtonStyle.danger)
+    async def btn_autodel_off(self, interaction: discord.Interaction, button: discord.ui.Button):
+        eid = await self._ensure_selected(interaction)
+        if not eid:
+            return
+        ok, msg = await _apply_event_update(interaction, eid, auto_delete="off")
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+# ---------- Legacy command (kept for power users / debugging) ----------
+
+@app_commands.describe(
+    event="Event auswählen",
+    ort="Neuer Ort (optional)",
+    treffpunkt="Neuer Treffpunkt (optional)",
+    datum="Neues Datum (optional)",
+    zeit="Neue Zeit (optional)",
+    slots="Neue Slots (optional)",
+    gruppenlead="Neuer Gruppenlead (optional)",
+    anmerkung="Neue Anmerkung (optional)",
+    level="Neues Mindestlevel (z.B. 61)",
+)
+@bot.tree.command(name="event_edit_legacy", description="Bearbeitet ein Event (Legacy: Autocomplete, nur Ersteller/Admin)")
+@app_commands.autocomplete(event=_event_autocomplete)
+async def event_edit_legacy(
+    interaction: discord.Interaction,
+    event: str,
+    ort: Optional[str] = None,
+    treffpunkt: Optional[str] = None,
+    datum: Optional[str] = None,
+    zeit: Optional[str] = None,
+    slots: Optional[str] = None,
+    gruppenlead: Optional[str] = None,
+    level: Optional[int] = None,
+    anmerkung: Optional[str] = None,
+):
+    # delegate to the same update helper
+    ok, msg = await _apply_event_update(
+        interaction,
+        event,
+        ort=ort,
+        treffpunkt=treffpunkt,
+        datum=datum,
+        zeit=zeit,
+        slots=slots,
+        gruppenlead=gruppenlead,
+        level=level,
+        anmerkung=anmerkung,
+    )
+    await interaction.response.send_message(msg, ephemeral=True)
 
 @app_commands.describe(
     mode="AFK-Check an/aus",
@@ -1455,6 +1559,9 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         await safe_save()
         await update_event_post(guild, payload.message_id)
     try:
+        suppress_until = float(ev.get('suppress_unsub_until', 0) or 0)
+        if time.time() < suppress_until:
+            return
         await post_to_event_thread(guild, ev, f"➖ Abmeldung: <@{user_id}>")
         if promoted:
             await post_to_event_thread(guild, ev, "\n".join([f"➕ Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
@@ -1667,8 +1774,8 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    # In Development / for stability: sync per guild only (avoids "ghost" commands + broken autocomplete/UI caching)
     try:
-        # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
             try:
                 await bot.tree.sync(guild=g)
@@ -1676,14 +1783,10 @@ async def on_ready():
                 pass
     except Exception:
         pass
-    global TASKS_STARTED
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} Slash Commands global synchronisiert")
-    except Exception as e:
-        print(f"❌ Slash Sync Fehler: {e}")
+
     print(f"🤖 SlotBot online als {bot.user}")
 
+    global TASKS_STARTED
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
@@ -1692,6 +1795,7 @@ async def on_ready():
         TASKS_STARTED = True
 
 # -------------------- Main --------------------
+
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
