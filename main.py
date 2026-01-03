@@ -23,6 +23,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
 import discord
+
+import logging
+discord.utils.setup_logging(level=logging.INFO)
+
+# ---- Logging (helps diagnose "Die Anwendung reagiert nicht") ----
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
+logging.getLogger('discord').setLevel(logging.INFO)
+
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -67,6 +75,32 @@ intents.messages = True
 intents.message_content = False  # not needed for slash + reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+@bot.tree.command(name="ping", description="Quick health check (antwortet sofort)")
+async def ping_cmd(interaction: discord.Interaction):
+    try:
+        # respond fast; no heavy work
+        await interaction.response.send_message("🏓 Pong! Bot ist online.", ephemeral=True)
+    except discord.InteractionResponded:
+        await interaction.followup.send("🏓 Pong! Bot ist online.", ephemeral=True)
+
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    # Always log the real error to console so you get a traceback in your host logs
+    import traceback
+    traceback.print_exception(type(error), error, error.__traceback__)
+
+    msg = "❌ Unerwarteter Fehler im Command. Schau in die Logs (Stacktrace)."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
 
 # -------------------- Helpers / Persistence --------------------
 
@@ -593,16 +627,20 @@ async def event_create(
     anmerkung: Optional[str] = None,
 ):
     if interaction.guild is None or interaction.channel is None:
+        # Not deferred yet -> must use response
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True)
         return
 
+    # Defer immediately to avoid Discord's 3s interaction timeout
+    await interaction.response.defer(ephemeral=True)
+
     dt_date = parse_date_flexible(datum)
     if not dt_date:
-        await interaction.response.send_message("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
         return
     hm = _parse_time_hhmm(zeit)
     if not hm:
-        await interaction.response.send_message("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
         return
 
     dt_local = dt_date.replace(hour=hm[0], minute=hm[1])
@@ -613,7 +651,7 @@ async def event_create(
     auto_delete_hours = AUTO_DELETE_HOURS_DEFAULT
     if auto_delete is not None and auto_delete.strip() != "":
         if auto_delete.strip().lower() != "off":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ auto_delete akzeptiert nur `off` (oder leer lassen).",
                 ephemeral=True,
             )
@@ -624,13 +662,13 @@ async def event_create(
     # Build slots (default oder frei definierbar via `slots` Parameter)
     slots_dict = _parse_slots_spec(slots, interaction.guild)
     if not slots_dict:
-        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
     slots = slots_dict
 
     # Mindestlevel
     if level < 1 or level > 100:
-        await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+        await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
         return
 
     ev = {
@@ -661,7 +699,7 @@ async def event_create(
     content = build_event_header(ev_post) + "\n\n" + build_slots_text({"slots": ev_post.get("slots", slots) or slots, **ev_post})
     content += "\n\nReagiere mit dem passenden Emoji um dich einzutragen."
 
-    await interaction.response.send_message("✅ Event wird erstellt…", ephemeral=True)
+    await interaction.followup.send("✅ Event wird erstellt…", ephemeral=True)
     msg = await interaction.channel.send(content)
     # add reactions
     for emoji in slots.keys():
@@ -713,20 +751,22 @@ async def event_edit(
     if interaction.guild is None:
         await interaction.response.send_message("❌ Nur auf einem Server nutzbar.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
+
 
     ev = active_events.get(str(event))
     if not ev:
-        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
+        await interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True)
         return
     if not can_edit_event(interaction, ev):
-        await interaction.response.send_message("❌ Nicht erlaubt (nur Ersteller/Admin).", ephemeral=True)
+        await interaction.followup.send("❌ Nicht erlaubt (nur Ersteller/Admin).", ephemeral=True)
         return
 
     # read current header from message so we can strike-through like before
     msg_id = int(event)
     msg = await fetch_message(interaction.guild, ev["channel_id"], msg_id)
     if not msg:
-        await interaction.response.send_message("❌ Event-Post nicht gefunden.", ephemeral=True)
+        await interaction.followup.send("❌ Event-Post nicht gefunden.", ephemeral=True)
         return
     header_text = msg.content.split("\n\n", 1)[0]
 
@@ -748,13 +788,13 @@ async def event_edit(
         if datum:
             d0 = parse_date_flexible(datum, now_local=datetime.now(TZ))
             if not d0:
-                await interaction.response.send_message("❌ Ungültiges Datum.", ephemeral=True)
+                await interaction.followup.send("❌ Ungültiges Datum.", ephemeral=True)
                 return
             cur_local = cur_local.replace(year=d0.year, month=d0.month, day=d0.day)
         if zeit:
             hm = _parse_time_hhmm(zeit)
             if not hm:
-                await interaction.response.send_message("❌ Ungültige Zeit (HH:MM).", ephemeral=True)
+                await interaction.followup.send("❌ Ungültige Zeit (HH:MM).", ephemeral=True)
                 return
             cur_local = cur_local.replace(hour=hm[0], minute=hm[1])
         new_utc = _ensure_utc(cur_local.astimezone(pytz.utc))
@@ -768,10 +808,13 @@ async def event_edit(
 
     # Slots (mit Erhalt der bestehenden Anmeldungen)
     if slots is not None:
-        new_slots = parse_slots(slots)
-        if not new_slots:
-            await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
+        new_slots_dict = _parse_slots_spec(slots, interaction.guild)
+        if not new_slots_dict:
+            await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
             return
+        # event state stores only the numeric limits + signup lists
+        new_slots = {k: int(v.get("limit", 0)) for k, v in new_slots_dict.items()}
+        
 
         old_slots = ev.get("slots", {})
         updated_slots = {}
@@ -792,7 +835,7 @@ async def event_edit(
                     not_removable.append(ok)
 
         if not_removable:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable),
                 ephemeral=True,
             )
@@ -866,7 +909,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = guild.get_thread(int(tid))
+                    thread = interaction.guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -884,7 +927,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = guild.get_thread(int(tid))
+                    thread = interaction.guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -892,7 +935,7 @@ async def event_edit(
                 if thread:
                     lines = []
                     for emo, uid in promoted:
-                        member = guild.get_member(int(uid))
+                        member = interaction.guild.get_member(int(uid))
                         name = member.display_name if member else f"<@{uid}>"
                         lines.append(f"{emo} → {name}")
                     if lines:
@@ -951,7 +994,7 @@ async def event_edit(
     # Mindestlevel
     if level is not None:
         if level < 1 or level > 100:
-            await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+            await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
             return
         old_lvl = ev.get("min_level")
         ev["min_level"] = int(level)
@@ -986,7 +1029,7 @@ async def event_edit(
     try:
         await msg.edit(content=content)
     except Exception as e:
-        await interaction.response.send_message(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
+        await interaction.followup.send(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
         return
 
     # post changes to thread
@@ -1001,7 +1044,7 @@ async def event_edit(
         except Exception:
             pass
 
-    await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
+    await interaction.followup.send("✅ Event aktualisiert.", ephemeral=True)
 
 @app_commands.describe(
     mode="AFK-Check an/aus",
@@ -1667,6 +1710,7 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    print(f"✅ Bot online als {bot.user} (Guilds: {len(bot.guilds)})")
     try:
         # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
@@ -1684,6 +1728,23 @@ async def on_ready():
         print(f"❌ Slash Sync Fehler: {e}")
     print(f"🤖 SlotBot online als {bot.user}")
 
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # Lightweight logging so you see in Render logs whether interactions arrive at all
+    try:
+        name = None
+        if interaction.type == discord.InteractionType.application_command:
+            try:
+                name = interaction.data.get("name")
+            except Exception:
+                name = None
+        print(f"➡️ Interaction: type={interaction.type} name={name} user={getattr(interaction.user,'id',None)} guild={getattr(getattr(interaction,'guild',None),'id',None)}")
+    except Exception:
+        pass
+    await bot.process_application_commands(interaction)
+
+
+
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
@@ -1695,5 +1756,48 @@ async def on_ready():
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
+
+    if not DISCORD_TOKEN:
+        print("❌ DISCORD_TOKEN fehlt (Environment Variable). Bot bleibt offline, Slash Commands reagieren nicht.")
+        # Flask weiterlaufen lassen, damit Render nicht meckert
+        threading.Event().wait()
+        raise SystemExit(1)
+
+    # Flask (keep-alive / health) in a daemon thread
     threading.Thread(target=run_flask, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+
+    async def _run_discord_with_backoff():
+        """
+        Render (oder ähnliche Hoster) starten den Prozess bei Exit sofort neu.
+        Wenn Discord uns wegen global rate limits blockt (HTTP 429), würden wir sonst
+        in eine Crash-Loop geraten und die Sperre verlängern.
+        """
+        backoff = 30          # seconds
+        max_backoff = 15 * 60 # 15 minutes
+
+        while True:
+            try:
+                print("🔐 Discord login...")
+                await bot.start(DISCORD_TOKEN)
+                # bot.start läuft "für immer" — wenn wir hier rausfallen, wurde gestoppt
+                backoff = 30
+            except discord.HTTPException as e:
+                # Global/Cloudflare block wegen zu vieler Requests (meist durch Restart-Loop)
+                status = getattr(e, "status", None)
+                if status == 429:
+                    print(f"⚠️ Discord 429 (global rate limit). Warte {backoff}s und versuche es erneut ...")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+                    continue
+                raise
+            except Exception as e:
+                print("❌ Bot ist abgestürzt:", repr(e))
+                await asyncio.sleep(10)
+            finally:
+                try:
+                    if not bot.is_closed():
+                        await bot.close()
+                except Exception:
+                    pass
+
+    asyncio.run(_run_discord_with_backoff())
