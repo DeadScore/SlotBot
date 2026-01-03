@@ -1909,7 +1909,7 @@ def _start_flask_healthcheck():
         port = 10000
     try:
         print(f"🌐 Flask healthcheck listening on 0.0.0.0:{port}", flush=True)
-        app.run(host="0.0.0.0", port=port)
+        flask_flask_app.run(host="0.0.0.0", port=port)
     except Exception as e:
         print(f"❌ Flask failed to start: {e!r}", flush=True)
 
