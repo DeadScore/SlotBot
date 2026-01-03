@@ -23,6 +23,13 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
 import discord
+
+import logging
+
+# ---- Logging (helps diagnose "Die Anwendung reagiert nicht") ----
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
+logging.getLogger('discord').setLevel(logging.INFO)
+
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
@@ -1691,6 +1698,7 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    print(f"✅ Bot online als {bot.user} (Guilds: {len(bot.guilds)})")
     try:
         # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
@@ -1720,6 +1728,12 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
 
+    if not DISCORD_TOKEN:
+        print("❌ DISCORD_TOKEN fehlt (Environment Variable). Bot bleibt offline, Slash Commands reagieren nicht.")
+        # Flask weiterlaufen lassen, damit Render nicht meckert
+        threading.Event().wait()
+        raise SystemExit(1)
+
     # Flask (keep-alive / health) in a daemon thread
     threading.Thread(target=run_flask, daemon=True).start()
 
@@ -1734,6 +1748,7 @@ if __name__ == "__main__":
 
         while True:
             try:
+                print("🔐 Discord login...")
                 await bot.start(DISCORD_TOKEN)
                 # bot.start läuft "für immer" — wenn wir hier rausfallen, wurde gestoppt
                 backoff = 30
