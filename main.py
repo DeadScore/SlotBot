@@ -798,7 +798,9 @@ async def event_edit(
             )
             return
 
-        slot_change_notes = []
+        slot_lines = []
+        overflow_notes = []
+        overflow_moved: Dict[str, int] = {}
 
         for nk, nlimit in new_slots.items():
             nlimit = int(nlimit)
@@ -809,21 +811,29 @@ async def event_edit(
                 wl = list(oslot.get("waitlist", []))
                 old_limit = int(oslot.get("limit", 0))
 
+                moved = 0
                 if old_limit and nlimit < old_limit and len(mains) > nlimit:
                     overflow = mains[nlimit:]
                     mains = mains[:nlimit]
                     wl = overflow + wl
+                    moved = len(overflow)
+                    overflow_moved[nk] = moved
 
                 updated_slots[nk] = {"limit": nlimit, "main": mains, "waitlist": wl}
+
                 if old_limit != nlimit:
-                    slot_change_notes.append(f"{nk}: {old_limit} → {nlimit}")
+                    line = f"{nk}: {old_limit} → {nlimit}"
+                    if moved:
+                        line += f" (⚠️ {moved} auf Warteliste)"
+                    slot_lines.append(line)
             else:
                 updated_slots[nk] = {"limit": nlimit, "main": [], "waitlist": []}
-                slot_change_notes.append(f"{nk}: neu ({nlimit})")
+                slot_lines.append(f"{nk}: neu ({nlimit})")
 
+        # Entfernte Slots (nur möglich, wenn leer)
         for ok in old_slots.keys():
             if _n(ok) not in new_norms:
-                slot_change_notes.append(f"{ok}: entfernt")
+                slot_lines.append(f"{ok}: entfernt")
 
         ev["slots"] = updated_slots
 
@@ -832,8 +842,9 @@ async def event_edit(
         except Exception:
             promoted = []
 
-        if slot_change_notes:
-            changes.append("Slots: " + ", ".join(slot_change_notes))
+        if slot_lines:
+            changes.append("Slots: " + ", ".join(slot_lines))
+
 
         try:
             for ek in updated_slots.keys():
@@ -849,6 +860,24 @@ async def event_edit(
                         pass
         except Exception:
             pass
+
+        if slot_lines:
+            try:
+                tid = ev.get("thread_id")
+                thread = None
+                if tid:
+                    thread = guild.get_thread(int(tid))
+                    if thread is None:
+                        ch = await bot.fetch_channel(int(tid))
+                        if isinstance(ch, discord.Thread):
+                            thread = ch
+                if thread:
+                    pretty = "\n".join(f"• {x}" for x in slot_lines)
+                    await thread.send("🛠️ **Slots angepasst:**\n" + pretty)
+            except Exception:
+                pass
+
+
 
         if promoted:
             try:
