@@ -84,6 +84,36 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     except Exception:
         pass
 
+
+@bot.event
+async def on_connect():
+    print("🔌 Discord Gateway connected.", flush=True)
+
+@bot.event
+async def on_disconnect():
+    print("🔌 Discord Gateway disconnected.", flush=True)
+
+@bot.event
+async def on_resumed():
+    print("🔁 Discord session resumed.", flush=True)
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # Helpful to debug "Application did not respond": confirms the bot received the interaction at all.
+    try:
+        name = getattr(getattr(interaction, "data", None), "get", lambda *_: None)("name") if interaction.data else None
+    except Exception:
+        name = None
+    print(f"➡️ Interaction received: type={interaction.type} name={name} user={getattr(interaction.user,'id',None)} guild={interaction.guild_id}", flush=True)
+    try:
+        await bot.tree.process_interaction(interaction)
+    except Exception as e:
+        # Fallback: at least log
+        import traceback
+        traceback.print_exception(type(e), e, e.__traceback__)
+
+
+
 # -------------------- Helpers / Persistence --------------------
 
 def _now_utc() -> datetime:
@@ -1739,33 +1769,24 @@ async def cleanup_task():
         await asyncio.sleep(60)
 
 
-SYNC_DONE = False
-
 @bot.event
 async def on_ready():
-    global TASKS_STARTED, SYNC_DONE
-
-    print(f"🤖 SlotBot online als {bot.user} (Guilds: {len(bot.guilds)})")
-
-    # ---- Slash command sync (do this once to avoid rate limits) ----
-    if not SYNC_DONE:
+    # Sync commands fast per guild (global sync can take a while and may rate-limit)
+    total = 0
+    for g in list(bot.guilds):
         try:
-            sync_guild_id = os.getenv("SYNC_GUILD_ID")
-            if sync_guild_id:
-                g = bot.get_guild(int(sync_guild_id))
-                if g:
-                    synced = await bot.tree.sync(guild=g)
-                    print(f"✅ {len(synced)} Slash Commands für Guild {g.id} synchronisiert (SYNC_GUILD_ID).")
-                else:
-                    print(f"⚠️ SYNC_GUILD_ID={sync_guild_id} gesetzt, aber Bot ist nicht in dieser Guild.")
-            else:
-                synced = await bot.tree.sync()
-                print(f"✅ {len(synced)} Slash Commands global synchronisiert.")
+            bot.tree.copy_global_to(guild=g)
+            synced = await asyncio.wait_for(bot.tree.sync(guild=g), timeout=30)
+            total += len(synced)
+            print(f"✅ Slash Commands synchronisiert für Guild: {g.name} ({g.id}) – {len(synced)}", flush=True)
+        except asyncio.TimeoutError:
+            print(f"⚠️ Slash Sync Timeout für Guild: {g.name} ({g.id})", flush=True)
         except Exception as e:
-            print(f"❌ Slash Sync Fehler: {e!r}")
-        SYNC_DONE = True
+            print(f"⚠️ Slash Sync Fehler für Guild {g.id}: {e!r}", flush=True)
 
-    # ---- Background tasks (start once) ----
+    print(f"🤖 SlotBot online als {bot.user} | Guilds: {len(bot.guilds)} | Synced: {total}", flush=True)
+
+    global TASKS_STARTED
     if not TASKS_STARTED:
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
@@ -1773,7 +1794,7 @@ async def on_ready():
         BACKGROUND_TASKS["roll_watcher"] = bot.loop.create_task(roll_watcher_task(), name="slotbot_roll_watcher")
         TASKS_STARTED = True
 
-
+# -------------------- Main --------------------
 # -------------------- Main --------------------
 
 
@@ -1785,25 +1806,25 @@ async def _run_bot_forever():
     max_backoff = 300  # 5 minutes
     while True:
         try:
-            print("🔐 Discord login…")
+            print("🔐 Discord login…", flush=True)
             await bot.start(DISCORD_TOKEN, reconnect=True)
         except discord.HTTPException as e:
             # Discord global rate limit / temporary block
             status = getattr(e, "status", None)
             if status == 429:
-                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…")
+                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…", flush=True)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
                 continue
-            print(f"❌ Discord HTTPException: {e!r}")
+            print(f"❌ Discord HTTPException: {e!r}", flush=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
             continue
         except discord.LoginFailure:
-            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).")
+            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
             return
         except Exception as e:
-            print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}")
+            print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}", flush=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
             continue
@@ -1819,7 +1840,7 @@ if __name__ == "__main__":
     try:
         t = threading.Thread(target=run_flask, daemon=True)
         t.start()
-        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{PORT}")
+        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{PORT}", flush=True)
     except Exception as e:
         print(f"⚠️ Konnte Flask nicht starten: {e!r}")
 
