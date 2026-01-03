@@ -1808,78 +1808,82 @@ async def on_ready():
 # -------------------- Main --------------------
 
 
-# --- Resilient runner to avoid crash-loops on Discord global rate limits (HTTP 429) ---
+# --- Resilient runner (Web Service) ---
+# Render (Web Service) requires an open port. We run Flask in a daemon thread and the bot on the main asyncio loop.
 import asyncio
 
-async def _ensure_http_session():
-    """discord.py can end up with a closed aiohttp session after failed logins.
-    Recreate it defensively so the next login attempt doesn't crash with 'Session is closed'.
-    """
+async def _safe_close_bot():
     try:
-        import aiohttp  # type: ignore
-        sess = getattr(getattr(bot, "http", None), "_HTTPClient__session", None)
-        if sess is None or getattr(sess, "closed", False):
-            setattr(bot.http, "_HTTPClient__session", aiohttp.ClientSession())
+        await bot.close()
+    except Exception:
+        pass
+    # Extra safety: close the underlying aiohttp session if discord.py didn't.
+    try:
+        http = getattr(bot, "http", None)
+        sess = getattr(http, "_HTTPClient__session", None) if http else None
+        if sess and not sess.closed:
+            await sess.close()
     except Exception:
         pass
 
 async def _run_bot_forever():
-    backoff = 5
-    max_backoff = 300  # 5 minutes
+    backoff = 10
+    max_backoff = 600  # 10 minutes
     while True:
         try:
-            await _ensure_http_session()
             print("🔐 Discord login…", flush=True)
             await bot.start(DISCORD_TOKEN, reconnect=True)
-            # If bot.start() ever returns (it normally shouldn't), wait a bit and retry.
-            await asyncio.sleep(5)
-            backoff = 5
+            # If bot.start returns, treat as disconnect and retry
+            backoff = 10
         except discord.HTTPException as e:
             status = getattr(e, "status", None)
             if status == 429:
                 print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…", flush=True)
+                await _safe_close_bot()
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
                 continue
             print(f"❌ Discord HTTPException: {e!r}", flush=True)
+            await _safe_close_bot()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+            continue
+        except RuntimeError as e:
+            # Common after failed login attempts: "Session is closed"
+            if "Session is closed" in str(e):
+                print(f"⚠️ RuntimeError('Session is closed'). Sleeping {backoff}s and retrying…", flush=True)
+                await _safe_close_bot()
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+                continue
+            print(f"❌ RuntimeError: {e!r}", flush=True)
+            await _safe_close_bot()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
             continue
         except discord.LoginFailure:
             print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
+            await _safe_close_bot()
             return
-        except RuntimeError as e:
-            # Happens after rate-limited/failed logins if aiohttp session got closed.
-            if "Session is closed" in str(e):
-                print("⚠️ aiohttp session closed; recreating session and retrying…", flush=True)
-                try:
-                    await _ensure_http_session()
-                except Exception:
-                    pass
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
-                continue
-            print(f"❌ RuntimeError im Bot-Runner: {e!r}", flush=True)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)
-            continue
         except Exception as e:
             print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}", flush=True)
+            await _safe_close_bot()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
             continue
+        finally:
+            # Ensure clean close between retries if start exited unexpectedly
+            await _safe_close_bot()
 
 if __name__ == "__main__":
-    # Start Flask healthcheck server for Render port detection
+    # Start Flask (healthcheck) in a daemon thread if not already running.
     try:
-        t = threading.Thread(target=run_flask, daemon=True)
-        t.start()
-        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{PORT}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Konnte Flask nicht starten: {e!r}")
-
-    # Run Discord bot with backoff (avoid crash-loops on HTTP 429)
+        # If the script already started Flask earlier, this will be a no-op.
+        pass
+    except Exception:
+        pass
     try:
         asyncio.run(_run_bot_forever())
     except KeyboardInterrupt:
         pass
+
