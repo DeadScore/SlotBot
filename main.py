@@ -1766,7 +1766,47 @@ async def on_ready():
 
 # -------------------- Main --------------------
 
+
+# --- Resilient runner to avoid crash-loops on Discord global rate limits (HTTP 429) ---
+import asyncio
+
+async def _run_bot_forever():
+    backoff = 5
+    max_backoff = 300  # 5 minutes
+    while True:
+        try:
+            print("🔐 Discord login…")
+            await bot.start(DISCORD_TOKEN, reconnect=True)
+        except discord.HTTPException as e:
+            # Discord global rate limit / temporary block
+            status = getattr(e, "status", None)
+            if status == 429:
+                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {backoff}s and retrying…")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+                continue
+            print(f"❌ Discord HTTPException: {e!r}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+            continue
+        except discord.LoginFailure:
+            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).")
+            return
+        except Exception as e:
+            print(f"❌ Unerwarteter Fehler im Bot-Runner: {e!r}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+            continue
+        finally:
+            # Ensure clean close between retries
+            try:
+                await bot.close()
+            except Exception:
+                pass
+
 if __name__ == "__main__":
-    print("🚀 Starte SlotBot (rebuilt) + Flask ...")
-    threading.Thread(target=run_flask, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+    # Flask (Render health check) runs in a thread; bot runs on the main asyncio loop.
+    try:
+        asyncio.run(_run_bot_forever())
+    except KeyboardInterrupt:
+        pass
