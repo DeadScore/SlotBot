@@ -1892,11 +1892,108 @@ async def run_bot_forever():
         finally:
             await _safe_close()
 
-if __name__ == "__main__":
-    print("🚀 Starte SlotBot + Flask (Render Web Service) ...", flush=True)
-    start_flask_thread()
+# -------------------------
+# Robust Web Service runner
+# -------------------------
+import os, sys, time, asyncio, threading
+try:
+    import fcntl  # Render/Linux
+except Exception:
+    fcntl = None
+
+def _start_flask_healthcheck():
+    """Bind to $PORT so Render detects an open port (Web Service)."""
     try:
-        asyncio.run(run_bot_forever())
-    except KeyboardInterrupt:
+        port = int(os.environ.get("PORT", "10000"))
+    except Exception:
+        port = 10000
+    try:
+        print(f"🌐 Flask healthcheck listening on 0.0.0.0:{port}", flush=True)
+        app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        print(f"❌ Flask failed to start: {e!r}", flush=True)
+
+def _acquire_single_instance_lock():
+    """Prevent accidental double-starts inside the same container."""
+    if fcntl is None:
+        return None
+    lock_path = "/tmp/slotbot.lock"
+    lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("⚠️ Another SlotBot instance is already running in this container. Exiting.", flush=True)
+        sys.exit(0)
+    return lock_file  # keep open forever
+
+async def _close_http_session_safely():
+    """Close bot and underlying aiohttp session best-effort (avoids 'Unclosed client session')."""
+    try:
+        await bot.close()
+    except Exception:
         pass
+    try:
+        http = getattr(bot, "http", None)
+        sess = getattr(http, "_HTTPClient__session", None) if http else None
+        if sess and not sess.closed:
+            await sess.close()
+    except Exception:
+        pass
+
+def _hard_restart_process():
+    """Hard restart to fully reset discord.py/aiohttp state."""
+    print("🔁 Hard-restarting process to reset session state…", flush=True)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+async def _run_bot_forever():
+    backoff = 60
+    max_backoff = 900  # 15 minutes
+    while True:
+        try:
+            print("🔐 Discord login…", flush=True)
+            await bot.start(DISCORD_TOKEN, reconnect=True)
+            backoff = 60
+        except discord.LoginFailure:
+            print("❌ Discord LoginFailure: Token ungültig oder fehlt (DISCORD_TOKEN).", flush=True)
+            await _close_http_session_safely()
+            return
+        except discord.HTTPException as e:
+            status = getattr(e, "status", None)
+            if status == 429:
+                wait_s = min(backoff, max_backoff)
+                print(f"⚠️ Discord HTTP 429 (global rate limit). Sleeping {wait_s}s (no spam)…", flush=True)
+                await _close_http_session_safely()
+                time.sleep(wait_s)
+                _hard_restart_process()
+            wait_s = min(backoff, max_backoff)
+            print(f"❌ Discord HTTPException: {e!r} — sleeping {wait_s}s", flush=True)
+            await _close_http_session_safely()
+            await asyncio.sleep(wait_s)
+            backoff = min(backoff * 2, max_backoff)
+        except RuntimeError as e:
+            if "Session is closed" in str(e):
+                wait_s = min(backoff, max_backoff)
+                print(f"⚠️ RuntimeError('Session is closed'). Sleeping {wait_s}s and restarting…", flush=True)
+                await _close_http_session_safely()
+                time.sleep(wait_s)
+                _hard_restart_process()
+            wait_s = min(backoff, max_backoff)
+            print(f"❌ RuntimeError: {e!r} — sleeping {wait_s}s", flush=True)
+            await _close_http_session_safely()
+            await asyncio.sleep(wait_s)
+            backoff = min(backoff * 2, max_backoff)
+        except Exception as e:
+            wait_s = min(backoff, max_backoff)
+            print(f"❌ Bot runner error: {e!r} — sleeping {wait_s}s", flush=True)
+            await _close_http_session_safely()
+            await asyncio.sleep(wait_s)
+            backoff = min(backoff * 2, max_backoff)
+        finally:
+            await _close_http_session_safely()
+
+if __name__ == "__main__":
+    _lock = _acquire_single_instance_lock()
+    t = threading.Thread(target=_start_flask_healthcheck, daemon=True)
+    t.start()
+    asyncio.run(_run_bot_forever())
 
