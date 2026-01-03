@@ -1728,31 +1728,22 @@ async def on_ready():
         print(f"❌ Slash Sync Fehler: {e}")
     print(f"🤖 SlotBot online als {bot.user}")
 
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    # Lightweight logging so you see in Render logs whether interactions arrive at all
+@bot.listen("on_interaction")
+async def _log_interaction(interaction: discord.Interaction):
+    """Log interactions without overriding discord.py's default app-command dispatch."""
     try:
+        itype = getattr(interaction, "type", None)
+        # For slash commands, data.name is the command name
         name = None
-        if interaction.type == discord.InteractionType.application_command:
-            try:
-                name = interaction.data.get("name")
-            except Exception:
-                name = None
-        print(f"➡️ Interaction: type={interaction.type} name={name} user={getattr(interaction.user,'id',None)} guild={getattr(getattr(interaction,'guild',None),'id',None)}")
-    except Exception:
-        pass
-    await bot.process_application_commands(interaction)
+        if getattr(interaction, "data", None) and isinstance(interaction.data, dict):
+            name = interaction.data.get("name")
+        user = getattr(interaction, "user", None) or getattr(interaction, "member", None)
+        uname = getattr(user, "name", str(user))
+        gid = getattr(getattr(interaction, "guild", None), "id", None)
+        print(f"➡️ Interaction: type={itype} name={name} user={uname} guild={gid}")
+    except Exception as e:
+        print("⚠️ Interaction log error:", repr(e))
 
-
-
-    if not TASKS_STARTED:
-        BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
-        BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
-        BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
-        BACKGROUND_TASKS["roll_watcher"] = bot.loop.create_task(roll_watcher_task(), name="slotbot_roll_watcher")
-        TASKS_STARTED = True
-
-# -------------------- Main --------------------
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
