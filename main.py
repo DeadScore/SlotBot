@@ -593,9 +593,8 @@ async def _event_delete_autocomplete(interaction: discord.Interaction, current: 
     return await _event_autocomplete(interaction, current)
 
 @app_commands.choices(art=ART_CHOICES)
-@bot.tree.command(name="event_create", description="Alias für /event (Event erstellen)")
 @bot.tree.command(name="event", description="Erstellt ein neues Event mit Slot-Registrierung")
-async def event_create(
+async def event(
     interaction: discord.Interaction,
     art: app_commands.Choice[str],
     zweck: str,
@@ -712,6 +711,49 @@ async def event_create(
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
 
+
+@app_commands.describe(
+    art="Event-Art",
+    zweck="Kurz: was macht ihr?",
+    ort="Ort",
+    datum="Datum: z.B. 23.12.2025 / heute / morgen",
+    zeit="Zeit: HH:MM (z.B. 20:00)",
+    gruppenlead="Optional: Wer leitet?",
+    treffpunkt="Optional: Treffpunkt",
+    anmerkung="Optional: Zusatzinfo",
+    auto_delete="Optional: Auto-Löschen deaktivieren (off)",
+    slots="Slots (Pflicht): z.B. ⚔️:3 🛡️:1 💉:2 oder :tank: : 1",
+)
+@app_commands.choices(art=ART_CHOICES)
+@bot.tree.command(name="event_create", description="Alias für /event (Event erstellen)")
+async def event_create(
+    interaction: discord.Interaction,
+    art: app_commands.Choice[str],
+    zweck: str,
+    ort: str,
+    datum: str,
+    zeit: str,
+    slots: str,
+    level: int,
+    gruppenlead: Optional[str] = None,
+    treffpunkt: Optional[str] = None,
+    auto_delete: Optional[str] = None,
+    anmerkung: Optional[str] = None,
+):
+    return await event(
+        interaction=interaction,
+        art=art,
+        zweck=zweck,
+        ort=ort,
+        datum=datum,
+        zeit=zeit,
+        slots=slots,
+        level=level,
+        gruppenlead=gruppenlead,
+        treffpunkt=treffpunkt,
+        auto_delete=auto_delete,
+        anmerkung=anmerkung,
+    )
 @app_commands.describe(
     event="Event auswählen",
     ort="Neuer Ort (optional)",
