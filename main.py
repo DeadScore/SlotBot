@@ -1716,5 +1716,41 @@ async def on_ready():
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
+
+    # Flask (keep-alive / health) in a daemon thread
     threading.Thread(target=run_flask, daemon=True).start()
-    bot.run(DISCORD_TOKEN)
+
+    async def _run_discord_with_backoff():
+        """
+        Render (oder ähnliche Hoster) starten den Prozess bei Exit sofort neu.
+        Wenn Discord uns wegen global rate limits blockt (HTTP 429), würden wir sonst
+        in eine Crash-Loop geraten und die Sperre verlängern.
+        """
+        backoff = 30          # seconds
+        max_backoff = 15 * 60 # 15 minutes
+
+        while True:
+            try:
+                await bot.start(DISCORD_TOKEN)
+                # bot.start läuft "für immer" — wenn wir hier rausfallen, wurde gestoppt
+                backoff = 30
+            except discord.HTTPException as e:
+                # Global/Cloudflare block wegen zu vieler Requests (meist durch Restart-Loop)
+                status = getattr(e, "status", None)
+                if status == 429:
+                    print(f"⚠️ Discord 429 (global rate limit). Warte {backoff}s und versuche es erneut ...")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+                    continue
+                raise
+            except Exception as e:
+                print("❌ Bot ist abgestürzt:", repr(e))
+                await asyncio.sleep(10)
+            finally:
+                try:
+                    if not bot.is_closed():
+                        await bot.close()
+                except Exception:
+                    pass
+
+    asyncio.run(_run_discord_with_backoff())
