@@ -610,23 +610,25 @@ async def event_create(
     anmerkung: Optional[str] = None,
 ):
     # Discord expects an initial ACK within ~3 seconds.
-    # Defer immediately to avoid "Die Anwendung reagiert nicht".
-    try:
-        if not interaction.response.is_done():
-    except Exception:
-        pass
-
+    # Quick validity checks (no awaits) are safe before deferring.
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True)
         return
 
+    # Defer immediately so Discord doesn't time out.
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
+
     dt_date = parse_date_flexible(datum)
     if not dt_date:
-        await interaction.response.send_message("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True)
         return
     hm = _parse_time_hhmm(zeit)
     if not hm:
-        await interaction.response.send_message("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True)
         return
 
     dt_local = dt_date.replace(hour=hm[0], minute=hm[1])
@@ -637,7 +639,7 @@ async def event_create(
     auto_delete_hours = AUTO_DELETE_HOURS_DEFAULT
     if auto_delete is not None and auto_delete.strip() != "":
         if auto_delete.strip().lower() != "off":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ auto_delete akzeptiert nur `off` (oder leer lassen).",
                 ephemeral=True,
             )
@@ -648,13 +650,13 @@ async def event_create(
     # Build slots (default oder frei definierbar via `slots` Parameter)
     slots_dict = _parse_slots_spec(slots, interaction.guild)
     if not slots_dict:
-        await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
+        await interaction.followup.send("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji) `:tank: : 1`", ephemeral=True)
         return
     slots = slots_dict
 
     # Mindestlevel
     if level < 1 or level > 100:
-        await interaction.response.send_message("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
+        await interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True)
         return
 
     ev = {
@@ -685,7 +687,7 @@ async def event_create(
     content = build_event_header(ev_post) + "\n\n" + build_slots_text({"slots": ev_post.get("slots", slots) or slots, **ev_post})
     content += "\n\nReagiere mit dem passenden Emoji um dich einzutragen."
 
-    await interaction.response.send_message("✅ Event wird erstellt…", ephemeral=True)
+    await interaction.followup.send("✅ Event wird erstellt…", ephemeral=True)
     msg = await interaction.channel.send(content)
     # add reactions
     for emoji in slots.keys():
