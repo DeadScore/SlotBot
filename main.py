@@ -1693,7 +1693,41 @@ async def on_ready():
 
 # -------------------- Main --------------------
 
+def _run_bot_with_retry():
+    # Wenn Render/Deploy mehrfach neu startet, kann Discord/Cloudflare (Error 1015 / HTTP 429) kurzzeitig blocken.
+    # Dann NICHT in eine Crash-Reboot-Schleife laufen -> Backoff.
+    backoff = 30  # Sekunden
+    max_backoff = 15 * 60  # 15 Minuten
+
+    while True:
+        try:
+            if not DISCORD_TOKEN:
+                raise RuntimeError("DISCORD_TOKEN fehlt. Bitte in Render → Environment Variables setzen.")
+            bot.run(DISCORD_TOKEN)
+            # bot.run ist blockierend und endet normalerweise nur bei Stop/Exception.
+            return
+        except discord.errors.HTTPException as e:
+            # Typisch: 429 + Cloudflare HTML (Error 1015) beim Login
+            status = getattr(e, "status", None)
+            txt = str(e)
+            if status == 429 or "Error 1015" in txt or "rate limited" in txt or "429" in txt:
+                wait = min(backoff, max_backoff)
+                print(f"⚠️ Discord/Cloudflare Rate-Limit beim Login (HTTP 429/1015). Warte {wait}s und versuche es erneut …")
+                time.sleep(wait)
+                backoff = min(backoff * 2, max_backoff)
+                continue
+            raise
+        except Exception as e:
+            # Sonstige Crashes: kurz warten, dann neu starten
+            print(f"❌ Discord Bot ist abgestürzt: {type(e).__name__}: {e}")
+            time.sleep(15)
+            continue
+
+
 if __name__ == "__main__":
     print("🚀 Starte SlotBot (rebuilt) + Flask ...")
+    threading.Thread(target=run_flask, daemon=True).start()
+    _run_bot_with_retry()
+
     threading.Thread(target=run_flask, daemon=True).start()
     bot.run(DISCORD_TOKEN)
