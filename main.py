@@ -64,14 +64,12 @@ def _escape_ics(text: str) -> str:
     if text is None:
         return ""
     return (str(text)
-            .replace("\", "\\")
-            .replace(";", "\;")
-            .replace(",", "\,")
-            .replace("
-", "\n"))
+            .replace("\\", "\\\\")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+            .replace("\n", "\\n"))
 
 def _dt_ics_utc(dt: datetime) -> str:
-(dt: datetime) -> str:
     dt = _ensure_utc(dt)
     return dt.strftime("%Y%m%dT%H%M%SZ")
 
