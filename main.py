@@ -60,6 +60,7 @@ flask_app = Flask("slotbot")
 from flask import Response, request
 
 def _escape_ics(text: str) -> str:
+    # Minimal ICS escaping
     if text is None:
         return ""
     return (str(text)
@@ -70,6 +71,7 @@ def _escape_ics(text: str) -> str:
 ", "\n"))
 
 def _dt_ics_utc(dt: datetime) -> str:
+(dt: datetime) -> str:
     dt = _ensure_utc(dt)
     return dt.strftime("%Y%m%dT%H%M%SZ")
 
