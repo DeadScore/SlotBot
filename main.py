@@ -38,12 +38,6 @@ TZ = pytz.timezone("Europe/Berlin")
 
 DATA_FILE = os.environ.get("EVENTS_FILE", "events.json")
 
-
-# Public base URL for calendar links (set this in Render env vars), e.g. https://your-service.onrender.com
-PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
-
-# Default calendar duration (minutes) for generated .ics (you can override via env var)
-CALENDAR_DURATION_MIN = int(os.getenv("CALENDAR_DURATION_MIN", "120"))
 AFK_START_MIN_BEFORE = 30
 AFK_DURATION_MIN = 20
 AFK_INTERVAL_MIN = 5
@@ -56,83 +50,6 @@ AUTO_DELETE_HOURS_DEFAULT = 2  # Event wird standardmäßig 2h nach Start gelös
 
 flask_app = Flask("slotbot")
 
-
-from flask import Response, request
-
-def _escape_ics(text: str) -> str:
-    # Minimal ICS escaping
-    if text is None:
-        return ""
-    return (str(text)
-            .replace("\\", "\\\\")
-            .replace(";", "\\;")
-            .replace(",", "\\,")
-            .replace("\n", "\\n"))
-
-def _dt_ics_utc(dt: datetime) -> str:
-    dt = _ensure_utc(dt)
-    return dt.strftime("%Y%m%dT%H%M%SZ")
-
-@flask_app.get("/ics/<event_id>.ics")
-def ics_event(event_id: str):
-    ev = active_events.get(str(event_id))
-    if not ev:
-        return ("not found", 404)
-
-    try:
-        start_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    except Exception:
-        return ("bad event time", 500)
-
-    end_utc = start_utc + timedelta(minutes=CALENDAR_DURATION_MIN)
-    uid = f"slotbot-{event_id}@{request.host}"
-    dtstamp = _dt_ics_utc(datetime.now(pytz.utc))
-
-    title = ev.get("title", "Event")
-    location = ev.get("ort", "")
-    details_lines = [f"Zweck: {ev.get('zweck','')}"]
-    if ev.get("treffpunkt"):
-        details_lines.append(f"Treffpunkt: {ev.get('treffpunkt')}")
-    if ev.get("gruppenlead"):
-        details_lines.append(f"Gruppenlead: {ev.get('gruppenlead')}")
-    if ev.get("anmerkung"):
-        details_lines.append(f"Anmerkung: {ev.get('anmerkung')}")
-    details = "
-".join([x for x in details_lines if x])
-
-    ics = (
-        "BEGIN:VCALENDAR
-"
-        "VERSION:2.0
-"
-        "PRODID:-//SlotBot//DE
-"
-        "CALSCALE:GREGORIAN
-"
-        "METHOD:PUBLISH
-"
-        "BEGIN:VEVENT
-"
-        f"UID:{_escape_ics(uid)}
-"
-        f"DTSTAMP:{dtstamp}
-"
-        f"DTSTART:{_dt_ics_utc(start_utc)}
-"
-        f"DTEND:{_dt_ics_utc(end_utc)}
-"
-        f"SUMMARY:{_escape_ics(title)}
-"
-        f"LOCATION:{_escape_ics(location)}
-"
-        f"DESCRIPTION:{_escape_ics(details)}
-"
-        "END:VEVENT
-"
-        "END:VCALENDAR
-"
-    )
-    return Response(ics, mimetype="text/calendar")
 @flask_app.get("/")
 def home():
     return "ok", 200
@@ -456,77 +373,6 @@ def build_slots_text(ev: dict) -> str:
         out.append("")
     return "\n".join(out).strip()
 
-import urllib.parse
-
-def build_calendar_links(ev: dict, message_id: int) -> dict:
-    try:
-        dt_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    except Exception:
-        dt_utc = _now_utc()
-    end_utc = dt_utc + timedelta(minutes=CALENDAR_DURATION_MIN)
-
-    title = ev.get("title", "Event")
-    details = []
-    if ev.get("zweck"):
-        details.append(f"Zweck: {ev.get('zweck')}")
-    if ev.get("treffpunkt"):
-        details.append(f"Treffpunkt: {ev.get('treffpunkt')}")
-    if ev.get("gruppenlead"):
-        details.append(f"Gruppenlead: {ev.get('gruppenlead')}")
-    if ev.get("anmerkung"):
-        details.append(f"Anmerkung: {ev.get('anmerkung')}")
-    details_txt = "
-".join(details)
-
-    dates = f"{dt_utc.strftime('%Y%m%dT%H%M%SZ')}/{end_utc.strftime('%Y%m%dT%H%M%SZ')}"
-    params = {
-        "action": "TEMPLATE",
-        "text": title,
-        "dates": dates,
-        "details": details_txt,
-        "location": ev.get("ort", ""),
-    }
-    google = "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-
-    links = {"google": google, "ics": None, "webcal": None}
-    if PUBLIC_BASE_URL:
-        ics = f"{PUBLIC_BASE_URL}/ics/{int(message_id)}.ics"
-        links["ics"] = ics
-        links["webcal"] = "webcal://" + ics.split("://", 1)[-1]
-    return links
-
-async def post_calendar_embed_to_thread(guild: discord.Guild, ev: dict, message_id: int):
-    try:
-        tid = ev.get("thread_id")
-        if not tid:
-            return
-        th = guild.get_thread(int(tid))
-        if th is None:
-            ch = await bot.fetch_channel(int(tid))
-            if isinstance(ch, discord.Thread):
-                th = ch
-        if not th:
-            return
-
-        links = build_calendar_links(ev, message_id)
-        emb = discord.Embed(
-            title="📅 Kalender-Link",
-            description="Ein Klick, und das Event landet im Kalender.",
-        )
-        emb.add_field(name="Google Calendar", value=f"[Event hinzufügen]({links['google']})", inline=False)
-        if links.get("ics"):
-            emb.add_field(name="Apple / iCal (.ics)", value=f"[ICS herunterladen]({links['ics']})
-Abo-Link: {links['webcal']}", inline=False)
-        else:
-            emb.add_field(
-                name="Apple / iCal (.ics)",
-                value="ICS-Link erst verfügbar, wenn `PUBLIC_BASE_URL` gesetzt ist (z.B. https://dein-service.onrender.com).",
-                inline=False,
-            )
-        await th.send(embed=emb)
-    except Exception:
-        pass
-
 
 async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
     """Postet eine Nachricht in den Event-Thread (falls vorhanden)."""
@@ -836,7 +682,6 @@ async def event_create(
 
     if th:
         await th.send("🧵 Thread für Updates.")
-        await post_calendar_embed_to_thread(interaction.guild, ev, msg.id)
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -1155,7 +1000,6 @@ async def event_edit(
             await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
         except Exception:
             pass
-        await post_calendar_embed_to_thread(interaction.guild, ev, msg_id)
 
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
