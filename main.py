@@ -29,8 +29,6 @@ from flask import Flask
 
 # -------------------- Config --------------------
 
-OWNER_IDS = {404173735130562562}
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN env var missing")
@@ -55,29 +53,6 @@ flask_app = Flask("slotbot")
 @flask_app.get("/")
 def home():
     return "ok", 200
-
-@flask_app.get("/ics/<event_id>.ics")
-def ics_event(event_id: str):
-    ev = active_events.get(str(event_id))
-    if not ev:
-        return "not found", 404
-
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-
-    ics = (
-        "BEGIN:VCALENDAR\n"
-        "VERSION:2.0\n"
-        "BEGIN:VEVENT\n"
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"SUMMARY:{ev.get('title','Event')}\n"
-        f"DESCRIPTION:{ev.get('zweck','')}\n"
-        f"LOCATION:{ev.get('ort','')}\n"
-        "END:VEVENT\n"
-        "END:VCALENDAR\n"
-    )
-    return flask_app.response_class(ics, mimetype="text/calendar")
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT)
@@ -113,6 +88,19 @@ def _parse_time_hhmm(s: str) -> Optional[Tuple[int, int]]:
     if not (0 <= hh <= 23 and 0 <= mm <= 59):
         return None
     return hh, mm
+
+
+GER_WEEKDAYS = {
+    0: "Montag",
+    1: "Dienstag",
+    2: "Mittwoch",
+    3: "Donnerstag",
+    4: "Freitag",
+    5: "Samstag",
+    6: "Sonntag",
+}
+
+OWNER_ID = 404173735130562562
 
 GER_MONTHS = {
     "jan": 1, "januar": 1,
@@ -182,6 +170,7 @@ def parse_date_flexible(date_str: str, now_local: Optional[datetime] = None) -> 
     return None
 
 def format_dt_local(dt_utc) -> str:
+    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin) inkl. deutschem Wochentag."""
     if dt_utc is None:
         return "—"
     if isinstance(dt_utc, str):
@@ -192,9 +181,10 @@ def format_dt_local(dt_utc) -> str:
 
     dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
-    wochentage = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
-    wd = wochentage[dt_local.weekday()]
-    return f"**{wd}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
+    weekday = GER_WEEKDAYS.get(dt_local.weekday(), "")
+    return f"**{weekday}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
+
+
 
     return dt_local.strftime("%d.%m.%Y %H:%M")
 
@@ -204,11 +194,16 @@ def safe_int(x, default=None):
     except Exception:
         return default
 
+
+def is_owner(user) -> bool:
+    return user is not None and user.id == OWNER_ID
+
 def is_admin(member: discord.Member) -> bool:
+
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
 def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
-    if interaction.user and interaction.user.id in OWNER_IDS:
+    if is_owner(interaction.user):
         return True
 
     if interaction.user is None:
@@ -264,6 +259,8 @@ DEFAULT_SLOTS = [
     ("💉", "Heiler", 2),
 ]
 
+
+
 # Slot-Parsing: erlaubt wie früher eine freie Slot-Definition, z.B.
 # `⚔️:3 🛡️:1 💉:2` oder `<:Tank:123456789012345678>:1`
 
@@ -275,6 +272,7 @@ SLOT_LABELS = {
     "🛡️": "Tank",
     "💉": "Heiler",
 }
+
 
 def _normalize_emoji(s: str) -> str:
     """Normalize unicode emoji so ⚔ and ⚔️ match. Custom emojis stay unchanged."""
@@ -295,6 +293,7 @@ def _find_slot_key(ev: dict, emoji: str) -> Optional[str]:
         if _normalize_emoji(str(k)) == ne:
             return k
     return None
+
 
 CUSTOM_EMOJI_RE = re.compile(r"^<a?:[A-Za-z0-9_]+:\d{15,21}>$")
 COLON_NAME_RE = re.compile(r"^:[A-Za-z0-9_]{1,64}:$")
@@ -366,21 +365,6 @@ def _default_slots_dict() -> Dict[str, dict]:
     for emoji, label, limit in DEFAULT_SLOTS:
         slots[emoji] = {"label": label, "limit": limit, "main": [], "waitlist": []}
     return slots
-
-import urllib.parse
-
-def build_google_calendar_link(ev: dict) -> str:
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-    params = {
-        "action": "TEMPLATE",
-        "text": ev.get("title", "Event"),
-        "dates": f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}",
-        "details": ev.get("zweck", ""),
-        "location": ev.get("ort", ""),
-    }
-    return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params)
-
 def build_event_header(ev: dict) -> str:
     lines = []
     lines.append(f"📣 **Event:** {ev['title']}")
@@ -412,6 +396,7 @@ def build_slots_text(ev: dict) -> str:
             out.append(f"• WL: {fmt_users(wait)}")
         out.append("")
     return "\n".join(out).strip()
+
 
 async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
     """Postet eine Nachricht in den Event-Thread (falls vorhanden)."""
@@ -518,6 +503,7 @@ def _slot_add_user(ev: dict, emoji: str, user_id: int) -> Tuple[str, str]:
     slot["waitlist"] = wl
     return "wait", "Slot voll, auf Warteliste gesetzt."
 
+
 def _slot_promote_waitlist(ev: dict) -> List[Tuple[str, int]]:
     """Füllt freie Main-Slots aus der Warteliste auf. Gibt Liste der Nachrücker zurück."""
     promoted: List[Tuple[str, int]] = []
@@ -608,6 +594,8 @@ async def _event_autocomplete(interaction: discord.Interaction, current: str) ->
     slots="Slots (Pflicht): z.B. ⚔️:3 🛡️:1 💉:2 oder :tank: : 1",
 )
 
+
+
 async def _event_delete_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     # identisch zu edit: User sieht nur eigene Events, Admins alle
     return await _event_autocomplete(interaction, current)
@@ -655,6 +643,7 @@ async def event_create(
             )
             return
         auto_delete_hours = None
+
 
     # Build slots (default oder frei definierbar via `slots` Parameter)
     slots_dict = _parse_slots_spec(slots, interaction.guild)
@@ -717,16 +706,6 @@ async def event_create(
 
     if th:
         await th.send("🧵 Thread für Updates.")
-        try:
-            google = build_google_calendar_link(ev)
-            base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
-            if base:
-                apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
-                await th.send(f"📅 Kalender:\n➡️ Google: {google}\n🍎 Apple: {apple}")
-            else:
-                await th.send(f"📅 Kalender:\n➡️ Google: {google}")
-        except Exception:
-            pass
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -810,6 +789,7 @@ async def event_edit(
         changes.append(f"Zeit: ~~{old_val}~~ → {new_val}")
         dt_utc = new_utc
 
+
     # Slots (mit Erhalt der bestehenden Anmeldungen)
     if slots is not None:
         new_slots = parse_slots(slots)
@@ -889,6 +869,7 @@ async def event_edit(
         if slot_lines:
             changes.append("Slots: " + ", ".join(slot_lines))
 
+
         try:
             for ek in updated_slots.keys():
                 try:
@@ -916,8 +897,11 @@ async def event_edit(
                             thread = ch
                 if thread:
                     pretty = "\n".join(f"• {x}" for x in slot_lines)
+                    await thread.send("🛠️ **Slots angepasst:**\n" + pretty)
             except Exception:
                 pass
+
+
 
         if promoted:
             try:
@@ -936,6 +920,7 @@ async def event_edit(
                         name = member.display_name if member else f"<@{uid}>"
                         lines.append(f"{emo} → {name}")
                     if lines:
+                        await thread.send("🔄 **Nachgerückt:**\n" + "\n".join(f"• {x}" for x in lines))
             except Exception:
                 pass
 
@@ -1034,6 +1019,11 @@ async def event_edit(
         thread = await get_or_create_thread(msg, ev)
     except Exception:
         thread = None
+    if thread and changes:
+        try:
+            await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
+        except Exception:
+            pass
 
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
@@ -1092,6 +1082,8 @@ async def help_cmd(interaction: discord.Interaction):
     )
     await interaction.response.send_message(txt, ephemeral=True)
 
+
+
 # -------------------- Roll Commands --------------------
 
 @bot.tree.command(name="start_roll", description="Startet einen Roll (Teilnahme via /roll). Nur ein Roll pro Channel.")
@@ -1122,6 +1114,7 @@ async def start_roll(interaction: discord.Interaction, dauer: int, grund: Option
     if grund and grund.strip():
         msg += f"\n🏷️ **Preis/Grund:** {grund.strip()}"
     await interaction.response.send_message(msg, ephemeral=False)
+
 
 @bot.tree.command(name="roll", description="Würfelt im aktuellen Roll (nur 1x). Zeigt Zahl öffentlich.")
 async def roll(interaction: discord.Interaction):
@@ -1267,6 +1260,8 @@ async def roll_watcher_task():
 @bot.tree.command(name="test", description="Testet ob der Bot läuft (zeigt Basis-Status).")
 async def test_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Bot läuft. Slash-Commands sind aktiv.", ephemeral=True)
+
+
 
 # -------------------- Event Delete (nur eigene) --------------------
 
@@ -1529,6 +1524,7 @@ async def reminder_task():
             await safe_save()
         await asyncio.sleep(60)
 
+
 async def afk_task():
     """AFK-Check per PN (DM): startet 30 Min vorher, läuft 20 Min, pingt alle 5 Min.
     Bestätigung per ✅ Reaktion auf die DM. Wer bestätigt hat, wird nicht mehr gepingt.
@@ -1642,6 +1638,7 @@ async def afk_task():
 
         await asyncio.sleep(10)
 
+
 async def cleanup_task():
     """Löscht Event-Post + Thread standardmäßig 2h nach Start (wenn nicht deaktiviert)."""
     await bot.wait_until_ready()
@@ -1720,36 +1717,13 @@ async def on_ready():
 
 # -------------------- Main --------------------
 
+
 if __name__ == "__main__":
     print("🚀 Starte SlotBot + Flask (stabil) ...")
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
 
-    
-@flask_app.get("/ics/<event_id>.ics")
-def ics_event(event_id: str):
-    ev = active_events.get(str(event_id))
-    if not ev:
-        return "not found", 404
-
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-
-    ics = (
-        "BEGIN:VCALENDAR\n"
-        "VERSION:2.0\n"
-        "BEGIN:VEVENT\n"
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"SUMMARY:{ev.get('title','Event')}\n"
-        f"DESCRIPTION:{ev.get('zweck','')}\n"
-        f"LOCATION:{ev.get('ort','')}\n"
-        "END:VEVENT\n"
-        "END:VCALENDAR\n"
-    )
-    return flask_app.response_class(ics, mimetype="text/calendar")
-
-def run_flask():
+    def run_flask():
         port = int(os.environ.get("PORT", "10000"))
         try:
             flask_app.run(host="0.0.0.0", port=port)
