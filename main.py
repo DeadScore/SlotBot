@@ -22,7 +22,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
-import urllib.parse
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -41,8 +40,6 @@ PORT = int(os.environ.get("PORT", "10000"))
 TZ = pytz.timezone("Europe/Berlin")
 
 DATA_FILE = os.environ.get("EVENTS_FILE", "events.json")
-PUBLIC_BASE_URL = (os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL') or '').rstrip('/')
-
 
 AFK_START_MIN_BEFORE = 30
 AFK_DURATION_MIN = 20
@@ -59,6 +56,7 @@ flask_app = Flask("slotbot")
 @flask_app.get("/")
 def home():
     return "ok", 200
+
 
 @flask_app.get("/ics/<event_id>.ics")
 def ics_event(event_id: str):
@@ -82,6 +80,7 @@ def ics_event(event_id: str):
         "END:VCALENDAR\n"
     )
     return flask_app.response_class(ics, mimetype="text/calendar")
+
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT)
@@ -196,16 +195,9 @@ def format_dt_local(dt_utc) -> str:
 
     dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
-    wd = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][dt_local.weekday()]
+    wochentage = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
+    wd = wochentage[dt_local.weekday()]
     return f"**{wd}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
-    if isinstance(dt_utc, str):
-        try:
-            dt_utc = datetime.fromisoformat(dt_utc)
-        except Exception:
-            return str(dt_utc)
-    dt_utc = _ensure_utc(dt_utc)
-    dt_local = dt_utc.astimezone(TZ)
-    return dt_local.strftime("%d.%m.%Y %H:%M")
 
 
     return dt_local.strftime("%d.%m.%Y %H:%M")
@@ -220,18 +212,11 @@ def is_admin(member: discord.Member) -> bool:
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
 def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
+    if interaction.user and interaction.user.id in OWNER_IDS:
+        return True
+
     if interaction.user is None:
         return False
-
-    # Global Owner override
-    if interaction.user.id in OWNER_IDS:
-        return True
-
-    if safe_int(ev.get("owner_id")) == interaction.user.id:
-        return True
-    if isinstance(interaction.user, discord.Member):
-        return is_admin(interaction.user)
-    return False
     if safe_int(ev.get("owner_id")) == interaction.user.id:
         return True
     if isinstance(interaction.user, discord.Member):
@@ -389,6 +374,9 @@ def _default_slots_dict() -> Dict[str, dict]:
     for emoji, label, limit in DEFAULT_SLOTS:
         slots[emoji] = {"label": label, "limit": limit, "main": [], "waitlist": []}
     return slots
+
+import urllib.parse
+
 def build_google_calendar_link(ev: dict) -> str:
     start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
     end = start + timedelta(hours=2)
@@ -400,6 +388,7 @@ def build_google_calendar_link(ev: dict) -> str:
         "location": ev.get("ort", ""),
     }
     return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params)
+
 
 def build_event_header(ev: dict) -> str:
     lines = []
@@ -742,7 +731,16 @@ async def event_create(
 
     if th:
         await th.send("🧵 Thread für Updates.")
-        await th.send(f"📅 Kalender:\n➡️ Google: {build_google_calendar_link(ev)}\n🍎 Apple: {PUBLIC_BASE_URL}/ics/{msg.id}.ics")
+        try:
+            google = build_google_calendar_link(ev)
+            base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
+            if base:
+                apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
+                await th.send(f"📅 Kalender:\n➡️ Google: {google}\n🍎 Apple: {apple}")
+            else:
+                await th.send(f"📅 Kalender:\n➡️ Google: {google}")
+        except Exception:
+            pass
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -1059,7 +1057,16 @@ async def event_edit(
     if thread and changes:
         try:
             await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {build_google_calendar_link(ev)}\n🍎 Apple: {PUBLIC_BASE_URL}/ics/{msg.id}.ics")
+        try:
+            google = build_google_calendar_link(ev)
+            base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
+            if base:
+                apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
+                await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {google}\n🍎 Apple: {apple}")
+            else:
+                await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {google}")
+        except Exception:
+            pass
         except Exception:
             pass
 
@@ -1761,7 +1768,32 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
 
-    def run_flask():
+    
+@flask_app.get("/ics/<event_id>.ics")
+def ics_event(event_id: str):
+    ev = active_events.get(str(event_id))
+    if not ev:
+        return "not found", 404
+
+    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+    end = start + timedelta(hours=2)
+
+    ics = (
+        "BEGIN:VCALENDAR\n"
+        "VERSION:2.0\n"
+        "BEGIN:VEVENT\n"
+        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"SUMMARY:{ev.get('title','Event')}\n"
+        f"DESCRIPTION:{ev.get('zweck','')}\n"
+        f"LOCATION:{ev.get('ort','')}\n"
+        "END:VEVENT\n"
+        "END:VCALENDAR\n"
+    )
+    return flask_app.response_class(ics, mimetype="text/calendar")
+
+
+def run_flask():
         port = int(os.environ.get("PORT", "10000"))
         try:
             flask_app.run(host="0.0.0.0", port=port)
