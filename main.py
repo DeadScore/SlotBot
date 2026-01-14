@@ -1054,21 +1054,29 @@ async def event_edit(
         thread = await get_or_create_thread(msg, ev)
     except Exception:
         thread = None
-    if thread and changes:
-        try:
-            await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        try:
-            google = build_google_calendar_link(ev)
-            base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
-            if base:
-                apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
-                await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {google}\n🍎 Apple: {apple}")
-            else:
-                await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {google}")
-        except Exception:
-            pass
-        except Exception:
-            pass
+   if thread and changes:
+    try:
+        await thread.send(
+            "✏️ **Event geändert:**\n"
+            + "\n".join(f"• {c}" for c in changes)
+        )
+    except Exception:
+        pass
+
+    try:
+        google = build_google_calendar_link(ev)
+        base = os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
+        if base:
+            apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
+            await thread.send(
+                f"📅 Kalender (aktualisiert):\n➡️ Google: {google}\n🍎 Apple: {apple}"
+            )
+        else:
+            await thread.send(
+                f"📅 Kalender (aktualisiert):\n➡️ Google: {google}"
+            )
+    except Exception:
+        pass
 
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
