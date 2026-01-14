@@ -26,11 +26,10 @@ import urllib.parse
 import discord
 from discord import app_commands
 from discord.ext import commands
-from flask import Flask, Response
+from flask import Flask
 
 # -------------------- Config --------------------
 
-# 🔑 Globale Owner (volle Rechte)
 OWNER_IDS = {404173735130562562}
 
 
@@ -42,9 +41,7 @@ PORT = int(os.environ.get("PORT", "10000"))
 TZ = pytz.timezone("Europe/Berlin")
 
 DATA_FILE = os.environ.get("EVENTS_FILE", "events.json")
-
-PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
-CALENDAR_DURATION_HOURS = 2
+PUBLIC_BASE_URL = (os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL') or '').rstrip('/')
 
 
 AFK_START_MIN_BEFORE = 30
@@ -63,10 +60,6 @@ flask_app = Flask("slotbot")
 def home():
     return "ok", 200
 
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=PORT)
-
-
 @flask_app.get("/ics/<event_id>.ics")
 def ics_event(event_id: str):
     ev = active_events.get(str(event_id))
@@ -74,26 +67,24 @@ def ics_event(event_id: str):
         return "not found", 404
 
     start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=CALENDAR_DURATION_HOURS)
-
-    def esc(s: str) -> str:
-        return str(s or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    end = start + timedelta(hours=2)
 
     ics = (
-        "BEGIN:VCALENDAR\r\n"
-        "VERSION:2.0\r\n"
-        "PRODID:-//SlotBot//DE\r\n"
-        "BEGIN:VEVENT\r\n"
-        f"UID:slotbot-{event_id}@slotbot\r\n"
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\r\n"
-        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\r\n"
-        f"SUMMARY:{esc(ev.get('title','Event'))}\r\n"
-        f"DESCRIPTION:{esc(ev.get('zweck',''))}\r\n"
-        f"LOCATION:{esc(ev.get('ort',''))}\r\n"
-        "END:VEVENT\r\n"
-        "END:VCALENDAR\r\n"
+        "BEGIN:VCALENDAR\n"
+        "VERSION:2.0\n"
+        "BEGIN:VEVENT\n"
+        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"SUMMARY:{ev.get('title','Event')}\n"
+        f"DESCRIPTION:{ev.get('zweck','')}\n"
+        f"LOCATION:{ev.get('ort','')}\n"
+        "END:VEVENT\n"
+        "END:VCALENDAR\n"
     )
-    return Response(ics, mimetype="text/calendar")
+    return flask_app.response_class(ics, mimetype="text/calendar")
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 # -------------------- Discord bot --------------------
 
@@ -195,7 +186,6 @@ def parse_date_flexible(date_str: str, now_local: Optional[datetime] = None) -> 
     return None
 
 def format_dt_local(dt_utc) -> str:
-    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin) inkl. deutschem, fettem Wochentag."""
     if dt_utc is None:
         return "—"
     if isinstance(dt_utc, str):
@@ -203,11 +193,23 @@ def format_dt_local(dt_utc) -> str:
             dt_utc = datetime.fromisoformat(dt_utc)
         except Exception:
             return str(dt_utc)
+
     dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
-
     wd = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][dt_local.weekday()]
     return f"**{wd}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
+    if isinstance(dt_utc, str):
+        try:
+            dt_utc = datetime.fromisoformat(dt_utc)
+        except Exception:
+            return str(dt_utc)
+    dt_utc = _ensure_utc(dt_utc)
+    dt_local = dt_utc.astimezone(TZ)
+    return dt_local.strftime("%d.%m.%Y %H:%M")
+
+
+    return dt_local.strftime("%d.%m.%Y %H:%M")
+
 def safe_int(x, default=None):
     try:
         return int(x)
@@ -221,7 +223,7 @@ def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
     if interaction.user is None:
         return False
 
-    # 🔑 Globale Owner dürfen immer alles
+    # Global Owner override
     if interaction.user.id in OWNER_IDS:
         return True
 
@@ -389,21 +391,15 @@ def _default_slots_dict() -> Dict[str, dict]:
     return slots
 def build_google_calendar_link(ev: dict) -> str:
     start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=CALENDAR_DURATION_HOURS)
-    dates = f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}"
+    end = start + timedelta(hours=2)
     params = {
         "action": "TEMPLATE",
         "text": ev.get("title", "Event"),
-        "dates": dates,
+        "dates": f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}",
         "details": ev.get("zweck", ""),
         "location": ev.get("ort", ""),
     }
     return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params)
-
-def build_apple_calendar_link(event_message_id: int) -> str | None:
-    if not PUBLIC_BASE_URL:
-        return None
-    return f"{PUBLIC_BASE_URL}/ics/{event_message_id}.ics"
 
 def build_event_header(ev: dict) -> str:
     lines = []
@@ -746,12 +742,7 @@ async def event_create(
 
     if th:
         await th.send("🧵 Thread für Updates.")
-        cal = build_google_calendar_link(ev)
-        apple = build_apple_calendar_link(msg.id)
-        desc = f"[➡️ Google Kalender]({cal})"
-        if apple:
-            desc += f"\n[🍎 Apple / iCal]({apple})"
-        await th.send(embed=discord.Embed(title="📅 Kalender", description=desc))
+        await th.send(f"📅 Kalender:\n➡️ Google: {build_google_calendar_link(ev)}\n🍎 Apple: {PUBLIC_BASE_URL}/ics/{msg.id}.ics")
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -838,7 +829,7 @@ async def event_edit(
 
     # Slots (mit Erhalt der bestehenden Anmeldungen)
     if slots is not None:
-        new_slots = _parse_slots_spec(slots, interaction.guild)
+        new_slots = parse_slots(slots)
         if not new_slots:
             await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
             return
@@ -1068,12 +1059,7 @@ async def event_edit(
     if thread and changes:
         try:
             await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        cal = build_google_calendar_link(ev)
-        apple = build_apple_calendar_link(msg.id)
-        desc = f"[➡️ Google Kalender]({cal})"
-        if apple:
-            desc += f"\n[🍎 Apple / iCal]({apple})"
-        await thread.send(embed=discord.Embed(title="📅 Kalender (aktualisiert)", description=desc))
+        await thread.send(f"📅 Kalender (aktualisiert):\n➡️ Google: {build_google_calendar_link(ev)}\n🍎 Apple: {PUBLIC_BASE_URL}/ics/{msg.id}.ics")
         except Exception:
             pass
 
@@ -1325,7 +1311,7 @@ async def event_delete_autocomplete(interaction: discord.Interaction, current: s
     guild_id = interaction.guild.id
     uid = interaction.user.id
 
-    isadm = (interaction.user.id in OWNER_IDS) or (isinstance(interaction.user, discord.Member) and is_admin(interaction.user))
+    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
     for mid_s, ev in active_events.items():
         if int(ev.get("guild_id", 0)) != int(guild_id):
             continue
@@ -1371,7 +1357,7 @@ async def event_delete_cmd(interaction: discord.Interaction, event: str):
         await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
         return
 
-    isadm = (interaction.user.id in OWNER_IDS) or (isinstance(interaction.user, discord.Member) and is_admin(interaction.user))
+    isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
     if (not isadm) and int(ev.get("creator_id", ev.get("owner_id", 0)) or 0) != interaction.user.id:
         await interaction.response.send_message("❌ Du kannst nur deine eigenen Events löschen.", ephemeral=True)
         return
