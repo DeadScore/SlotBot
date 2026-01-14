@@ -1763,47 +1763,16 @@ async def on_ready():
 # -------------------- Main --------------------
 
 
+
+
+# -------------------- Main --------------------
+
 if __name__ == "__main__":
     print("🚀 Starte SlotBot + Flask (stabil) ...")
-    if not DISCORD_TOKEN:
-        raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
-
-    
-@flask_app.get("/ics/<event_id>.ics")
-def ics_event(event_id: str):
-    ev = active_events.get(str(event_id))
-    if not ev:
-        return "not found", 404
-
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-
-    ics = (
-        "BEGIN:VCALENDAR\n"
-        "VERSION:2.0\n"
-        "BEGIN:VEVENT\n"
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
-        f"SUMMARY:{ev.get('title','Event')}\n"
-        f"DESCRIPTION:{ev.get('zweck','')}\n"
-        f"LOCATION:{ev.get('ort','')}\n"
-        "END:VEVENT\n"
-        "END:VCALENDAR\n"
-    )
-    return flask_app.response_class(ics, mimetype="text/calendar")
-
-
-def run_flask():
-        port = int(os.environ.get("PORT", "10000"))
-        try:
-            flask_app.run(host="0.0.0.0", port=port)
-        except Exception as e:
-            print("❌ Flask crashed:", e)
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Discord-Bot blockierend starten. Bei Login-Problemen (429/Cloudflare) nicht crash-loop-en.
     while True:
         try:
             bot.run(DISCORD_TOKEN)
