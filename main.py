@@ -369,6 +369,18 @@ def _default_slots_dict() -> Dict[str, dict]:
 
 import urllib.parse
 
+def build_google_calendar_link(ev: dict) -> str:
+    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+    end = start + timedelta(hours=2)
+    params = {
+        "action": "TEMPLATE",
+        "text": ev.get("title", "Event"),
+        "dates": f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}",
+        "details": ev.get("zweck", ""),
+        "location": ev.get("ort", ""),
+    }
+    return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params)
+
 def build_event_header(ev: dict) -> str:
     lines = []
     lines.append(f"📣 **Event:** {ev['title']}")
@@ -710,7 +722,9 @@ async def event_create(
             base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
             if base:
                 apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
+                await th.send(f"📅 Kalender:\n➡️ Google: {google}\n🍎 Apple: {apple}")
             else:
+                await th.send(f"📅 Kalender:\n➡️ Google: {google}")
         except Exception:
             pass
 
@@ -902,7 +916,6 @@ async def event_edit(
                             thread = ch
                 if thread:
                     pretty = "\n".join(f"• {x}" for x in slot_lines)
-                    await thread.send("🛠️ **Slots angepasst:**\n" + pretty)
             except Exception:
                 pass
 
@@ -923,7 +936,6 @@ async def event_edit(
                         name = member.display_name if member else f"<@{uid}>"
                         lines.append(f"{emo} → {name}")
                     if lines:
-                        await thread.send("🔄 **Nachgerückt:**\n" + "\n".join(f"• {x}" for x in lines))
             except Exception:
                 pass
 
@@ -1022,19 +1034,6 @@ async def event_edit(
         thread = await get_or_create_thread(msg, ev)
     except Exception:
         thread = None
-    if thread and changes:
-        try:
-            await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        try:
-            google = build_google_calendar_link(ev)
-            base = os.getenv('PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL')
-            if base:
-                apple = f"{base.rstrip('/')}/ics/{msg.id}.ics"
-            else:
-        except Exception:
-            pass
-        except Exception:
-            pass
 
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
@@ -1723,10 +1722,44 @@ async def on_ready():
 
 if __name__ == "__main__":
     print("🚀 Starte SlotBot + Flask (stabil) ...")
+    if not DISCORD_TOKEN:
+        raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
+
+    
+@flask_app.get("/ics/<event_id>.ics")
+def ics_event(event_id: str):
+    ev = active_events.get(str(event_id))
+    if not ev:
+        return "not found", 404
+
+    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+    end = start + timedelta(hours=2)
+
+    ics = (
+        "BEGIN:VCALENDAR\n"
+        "VERSION:2.0\n"
+        "BEGIN:VEVENT\n"
+        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"SUMMARY:{ev.get('title','Event')}\n"
+        f"DESCRIPTION:{ev.get('zweck','')}\n"
+        f"LOCATION:{ev.get('ort','')}\n"
+        "END:VEVENT\n"
+        "END:VCALENDAR\n"
+    )
+    return flask_app.response_class(ics, mimetype="text/calendar")
+
+def run_flask():
+        port = int(os.environ.get("PORT", "10000"))
+        try:
+            flask_app.run(host="0.0.0.0", port=port)
+        except Exception as e:
+            print("❌ Flask crashed:", e)
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
+    # Discord-Bot blockierend starten. Bei Login-Problemen (429/Cloudflare) nicht crash-loop-en.
     while True:
         try:
             bot.run(DISCORD_TOKEN)
