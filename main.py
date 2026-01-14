@@ -25,39 +25,9 @@ import pytz
 import discord
 from discord import app_commands
 from discord.ext import commands
-from flask import Flask, Response
-
-@flask_app.get("/ics/<event_id>.ics")
-def ics_event(event_id: str):
-    ev = active_events.get(str(event_id))
-    if not ev:
-        return "not found", 404
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-    def esc(s: str) -> str:
-        return str(s or "").replace("\\","\\\\").replace(";","\\;").replace(",","\\,").replace("\n","\\n")
-    ics = (
-        "BEGIN:VCALENDAR\r\n"
-        "VERSION:2.0\r\n"
-        "PRODID:-//SlotBot//DE\r\n"
-        "BEGIN:VEVENT\r\n"
-        f"UID:slotbot-{event_id}@slotbot\r\n"
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\r\n"
-        f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\r\n"
-        f"SUMMARY:{esc(ev.get('title','Event'))}\r\n"
-        f"DESCRIPTION:{esc(ev.get('zweck',''))}\r\n"
-        f"LOCATION:{esc(ev.get('ort',''))}\r\n"
-        "END:VEVENT\r\n"
-        "END:VCALENDAR\r\n"
-    )
-    return Response(ics, mimetype="text/calendar")
-
+from flask import Flask
 
 # -------------------- Config --------------------
-
-# 🔑 Globale Owner (volle Rechte)
-OWNER_IDS = {404173735130562562}
-
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
 if not DISCORD_TOKEN:
@@ -186,20 +156,8 @@ def parse_date_flexible(date_str: str, now_local: Optional[datetime] = None) -> 
 
     return None
 
-def build_google_calendar_link(ev: dict) -> str:
-    start = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
-    end = start + timedelta(hours=2)
-    dates = f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}"
-    params = {
-        "action": "TEMPLATE",
-        "text": ev.get("title","Event"),
-        "dates": dates,
-        "details": ev.get("zweck",""),
-        "location": ev.get("ort",""),
-    }
-    return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode(params)
-
 def format_dt_local(dt_utc) -> str:
+    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin). Akzeptiert datetime oder ISO-String."""
     if dt_utc is None:
         return "—"
     if isinstance(dt_utc, str):
@@ -209,8 +167,7 @@ def format_dt_local(dt_utc) -> str:
             return str(dt_utc)
     dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
-    wd = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"][dt_local.weekday()]
-    return f"**{wd}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
+    return dt_local.strftime("%d.%m.%Y %H:%M")
 
 
     return dt_local.strftime("%d.%m.%Y %H:%M")
@@ -227,13 +184,6 @@ def is_admin(member: discord.Member) -> bool:
 def can_edit_event(interaction: discord.Interaction, ev: dict) -> bool:
     if interaction.user is None:
         return False
-    if interaction.user.id in OWNER_IDS:
-        return True
-    if safe_int(ev.get("owner_id")) == interaction.user.id:
-        return True
-    if isinstance(interaction.user, discord.Member):
-        return is_admin(interaction.user)
-    return False
     if safe_int(ev.get("owner_id")) == interaction.user.id:
         return True
     if isinstance(interaction.user, discord.Member):
@@ -732,13 +682,6 @@ async def event_create(
 
     if th:
         await th.send("🧵 Thread für Updates.")
-        cal = build_google_calendar_link(ev)
-        base = os.getenv("RENDER_EXTERNAL_URL","").rstrip("/")
-        apple = f"{base}/ics/{msg.id}.ics" if base else None
-        msg_txt = f"[➡️ Google Kalender]({cal})"
-        if apple:
-            msg_txt += f"\n[🍎 Apple Kalender]({apple})"
-        await th.send(msg_txt)
 
     # update final post with proper header using stored dt_utc
     await update_event_post(interaction.guild, msg.id)
@@ -1055,13 +998,6 @@ async def event_edit(
     if thread and changes:
         try:
             await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        cal = build_google_calendar_link(ev)
-        base = os.getenv("RENDER_EXTERNAL_URL","").rstrip("/")
-        apple = f"{base}/ics/{msg.id}.ics" if base else None
-        msg_txt = f"[➡️ Google Kalender]({cal})"
-        if apple:
-            msg_txt += f"\n[🍎 Apple Kalender]({apple})"
-        await thread.send(msg_txt)
         except Exception:
             pass
 
