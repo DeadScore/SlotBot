@@ -747,6 +747,11 @@ async def event_create(
             pass
     # Thread wird nicht genutzt (nur Event-Post).
 
+    # Persistieren, damit Reactions + /event_edit funktionieren
+    ev["slots"] = slots
+    active_events[_event_key(msg.id)] = ev
+    await safe_save()
+
     # update final post
     await update_event_post(interaction.guild, msg.id)
 
