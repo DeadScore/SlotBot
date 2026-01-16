@@ -41,6 +41,7 @@ DATA_FILE = os.environ.get("EVENTS_FILE", "events.json")
 AFK_START_MIN_BEFORE = 30
 AFK_DURATION_MIN = 20
 AFK_INTERVAL_MIN = 5
+AFK_SOFT_WARN_MIN_BEFORE_KICK = 2  # Soft-Warnung x Minuten vor Kick
 
 REMINDER_MIN_BEFORE = 60
 
@@ -170,7 +171,10 @@ def parse_date_flexible(date_str: str, now_local: Optional[datetime] = None) -> 
     return None
 
 def format_dt_local(dt_utc) -> str:
-    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin) inkl. deutschem Wochentag."""
+    """Formatiert UTC-Zeit als lokale Zeit (Europe/Berlin).
+    Ausgabe: `Freitag, 16.01.2026 20:00` (Wochentag deutsch).
+    Akzeptiert datetime oder ISO-String.
+    """
     if dt_utc is None:
         return "—"
     if isinstance(dt_utc, str):
@@ -178,6 +182,32 @@ def format_dt_local(dt_utc) -> str:
             dt_utc = datetime.fromisoformat(dt_utc)
         except Exception:
             return str(dt_utc)
+    dt_utc = _ensure_utc(dt_utc)
+    dt_local = dt_utc.astimezone(TZ)
+    # deutsch
+    wd = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][dt_local.weekday()]
+    return f"{wd}, {dt_local.strftime('%d.%m.%Y %H:%M')}"
+
+def format_countdown_to_start(dt_utc) -> str:
+    """Human readable countdown to start in Berlin time."""
+    if dt_utc is None:
+        return "—"
+    try:
+        dt_utc = _ensure_utc(datetime.fromisoformat(dt_utc) if isinstance(dt_utc, str) else dt_utc)
+    except Exception:
+        return "—"
+    now_local = datetime.now(TZ)
+    start_local = dt_utc.astimezone(TZ)
+    delta = start_local - now_local
+    if delta.total_seconds() <= 0:
+        return "gestartet"
+    secs = int(delta.total_seconds())
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days > 0:
+        return f"{days}T {hours:02d}:{minutes:02d}"
+    return f"{hours:02d}:{minutes:02d}"
 
     dt_utc = _ensure_utc(dt_utc)
     dt_local = dt_utc.astimezone(TZ)
@@ -249,7 +279,8 @@ print(f"✅ {len(active_events)} gespeicherte Events geladen.")
 active_rolls: Dict[int, dict] = {}
 
 # AFK DM Prompts: message_id -> (event_message_id, user_id)
-afkdmprompts: Dict[int, Tuple[int, int]] = {}
+# AFK-Bestaetigung passiert per Button in DM (View)
+
 
 # -------------------- Slot handling --------------------
 
@@ -368,21 +399,41 @@ def _default_slots_dict() -> Dict[str, dict]:
 def build_event_header(ev: dict) -> str:
     lines = []
     lines.append(f"📣 **Event:** {ev['title']}")
-    lines.append(f"⏰ **START (Berlin):** **{format_dt_local(ev['event_time_utc'])} Uhr**")
+
+    # Startzeit inkl. deutschem Wochentag fett
+    start_str = format_dt_local(ev.get('event_time_utc'))
+    try:
+        # format_dt_local already includes weekday, extract for bolding
+        wd, rest = start_str.split(',', 1)
+        start_pretty = f"**{wd.strip()}**, {rest.strip()}"
+    except Exception:
+        start_pretty = start_str
+
+    lines.append(f"⏰ **START (Berlin):** {start_pretty} Uhr")
+    lines.append(f"⏳ **Countdown:** **{format_countdown_to_start(ev.get('event_time_utc'))}**")
+
     lines.append(f"🎯 **Zweck:** {ev.get('zweck','-')}")
     lines.append(f"📍 **Ort:** {ev.get('ort','-')}")
-    if ev.get("min_level") is not None:
+    if ev.get('min_level') is not None:
         lines.append(f"🎚️ **Mindestlevel:** **{int(ev.get('min_level') or 0)}+**")
-    if ev.get("treffpunkt"):
+    if ev.get('treffpunkt'):
         lines.append(f"📌 **Treffpunkt:** {ev.get('treffpunkt')}")
-    if ev.get("gruppenlead"):
+    if ev.get('gruppenlead'):
         lines.append(f"👑 **Gruppenlead:** {ev.get('gruppenlead')}")
-    if ev.get("anmerkung"):
+    if ev.get('anmerkung'):
         lines.append(f"📝 **Anmerkung:** {ev.get('anmerkung')}")
+
+    # AFK log/status
+    afk_log = ev.get('afk_log')
+    if afk_log:
+        lines.append(f"🧾 **AFK:** {afk_log}")
+
     lines.append("─────────────────────────────────")
     return "\n".join(lines)
 
+
 def build_slots_text(ev: dict) -> str:
+
     out = []
     for emoji, slot in ev["slots"].items():
         limit = int(slot.get("limit", 0))
@@ -693,21 +744,9 @@ async def event_create(
             await msg.add_reaction(emoji)
         except Exception:
             pass
+    # Thread wird nicht genutzt (nur Event-Post).
 
-    # create thread
-    th = await get_or_create_thread(msg, {"title": title, "thread_id": None})
-    if th:
-        ev["thread_id"] = th.id
-
-    # persist with slots and message id key
-    ev["slots"] = slots
-    active_events[_event_key(msg.id)] = ev
-    await safe_save()
-
-    if th:
-        await th.send("🧵 Thread für Updates.")
-
-    # update final post with proper header using stored dt_utc
+    # update final post
     await update_event_post(interaction.guild, msg.id)
 
 @app_commands.describe(
@@ -1012,18 +1051,7 @@ async def event_edit(
     except Exception as e:
         await interaction.response.send_message(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True)
         return
-
-    # post changes to thread
-    thread = None
-    try:
-        thread = await get_or_create_thread(msg, ev)
-    except Exception:
-        thread = None
-    if thread and changes:
-        try:
-            await thread.send("✏️ **Event geändert:**\n" + "\n".join(f"• {c}" for c in changes))
-        except Exception:
-            pass
+    # Kein Thread-Log (nur Event-Post).
 
     await interaction.response.send_message("✅ Event aktualisiert.", ephemeral=True)
 
@@ -1049,6 +1077,67 @@ async def event_afk(interaction: discord.Interaction, mode: app_commands.Choice[
     active_events[str(event)] = ev
     await safe_save()
     await interaction.response.send_message(f"✅ AFK-Check ist jetzt **{mode.value}**.", ephemeral=True)
+
+
+@bot.tree.command(name="event_afk_config", description="Stellt AFK-Zeiten pro Event ein (Ersteller/Admin/Owner)")
+@app_commands.autocomplete(event=_event_autocomplete)
+@app_commands.describe(
+    event="Event auswählen",
+    start_min_before="Start des AFK-Checks (Min vor Event)",
+    duration_min="Dauer des AFK-Fensters (Min)",
+    interval_min="Wie oft pingen (Min)",
+    soft_warn_min_before_kick="Soft-Warnung (Min vor Kick)"
+)
+async def event_afk_config(
+    interaction: discord.Interaction,
+    event: str,
+    start_min_before: Optional[int] = None,
+    duration_min: Optional[int] = None,
+    interval_min: Optional[int] = None,
+    soft_warn_min_before_kick: Optional[int] = None,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message("❌ Nur auf einem Server.", ephemeral=True)
+        return
+    ev = active_events.get(str(event))
+    if not ev:
+        await interaction.response.send_message("❌ Event nicht gefunden.", ephemeral=True)
+        return
+    if not can_edit_event(interaction, ev):
+        await interaction.response.send_message("❌ Nicht erlaubt.", ephemeral=True)
+        return
+
+    cfg = ev.get("afk_cfg") or {
+        "start_min_before": AFK_START_MIN_BEFORE,
+        "duration_min": AFK_DURATION_MIN,
+        "interval_min": AFK_INTERVAL_MIN,
+        "soft_warn_min_before_kick": AFK_SOFT_WARN_MIN_BEFORE_KICK,
+    }
+
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, int(v)))
+
+    if start_min_before is not None:
+        cfg["start_min_before"] = _clamp(start_min_before, 1, 180)
+    if duration_min is not None:
+        cfg["duration_min"] = _clamp(duration_min, 1, 120)
+    if interval_min is not None:
+        cfg["interval_min"] = _clamp(interval_min, 1, 60)
+    if soft_warn_min_before_kick is not None:
+        cfg["soft_warn_min_before_kick"] = _clamp(soft_warn_min_before_kick, 0, 30)
+
+    ev["afk_cfg"] = cfg
+    active_events[str(event)] = ev
+    await safe_save()
+
+    await interaction.response.send_message(
+        "✅ AFK-Konfig gespeichert:\n"
+        f"• Start: **{cfg['start_min_before']} Min vorher**\n"
+        f"• Dauer: **{cfg['duration_min']} Min**\n"
+        f"• Intervall: **{cfg['interval_min']} Min**\n"
+        f"• Soft-Warnung: **{cfg['soft_warn_min_before_kick']} Min vor Kick**",
+        ephemeral=True,
+    )
 
 @bot.tree.command(name="event_reset_notifications", description="Setzt Reminder-Flags für ein Event zurück (Ersteller/Admin)")
 @app_commands.autocomplete(event=_event_autocomplete)
@@ -1078,7 +1167,7 @@ async def help_cmd(interaction: discord.Interaction):
         "• `/event_afk on|off` – AFK-Check pro Event an/aus\n"
         "• `/event_reset_notifications` – Reminder-Flags zurücksetzen\n\n"
         f"Reminder: **{REMINDER_MIN_BEFORE} min** vorher (DM, einmalig)\n"
-        f"AFK: Start **{AFK_START_MIN_BEFORE} min** vorher, Dauer **{AFK_DURATION_MIN} min**, Ping alle **{AFK_INTERVAL_MIN} min** (per PN/DM)\n"
+        f"AFK: Start **{AFK_START_MIN_BEFORE} min** vorher, Dauer **{AFK_DURATION_MIN} min**, Ping alle **{AFK_INTERVAL_MIN} min** (DM mit Button ✅ Dabei)\n"
     )
     await interaction.response.send_message(txt, ephemeral=True)
 
@@ -1383,35 +1472,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
 
     emoji = str(payload.emoji)
-
-    # ---- AFK DM confirmation ----
+    # DMs: AFK-Confirm läuft per Button (Interaction), nicht per Reaction.
     if payload.guild_id is None:
-        # user reacted in a DM channel
-        if emoji == "✅" and payload.message_id in afkdmprompts:
-            event_msg_id, target_user_id = afkdmprompts.get(payload.message_id, (None, None))
-            if target_user_id != payload.user_id or event_msg_id is None:
-                return
-            ev = active_events.get(_event_key(int(event_msg_id)))
-            if not ev:
-                return
-            st = ev.setdefault("afk_state", {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None})
-            confirmed = set(int(x) for x in st.get("confirmed", []))
-            confirmed.add(payload.user_id)
-            st["confirmed"] = list(confirmed)
-            ev["afk_state"] = st
-            active_events[_event_key(int(event_msg_id))] = ev
-            await safe_save()
-            try:
-                user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
-                if user:
-                    await user.send("✅ Bestätigt! Du bist für das Event eingeplant.")
-                    try:
-                        if payload.message_id in afkdmprompts:
-                            del afkdmprompts[payload.message_id]
-                    except Exception:
-                        pass
-            except Exception:
-                pass
         return
 
     # ---- Guild slot handling ----
@@ -1478,17 +1540,36 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         active_events[_event_key(payload.message_id)] = ev
         await safe_save()
         await update_event_post(guild, payload.message_id)
-    try:
-        await post_to_event_thread(guild, ev, f"➖ Abmeldung: <@{user_id}>")
-        if promoted:
-            await post_to_event_thread(guild, ev, "\n".join([f"➕ Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
-    except Exception:
-        pass
 
 # -------------------- Background tasks --------------------
 
-BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"reminder": None, "afk": None, "cleanup": None, "roll_watcher": None}
+BACKGROUND_TASKS: Dict[str, Optional[asyncio.Task]] = {"countdown": None, "reminder": None, "afk": None, "cleanup": None, "roll_watcher": None}
 TASKS_STARTED = False
+
+async def countdown_task():
+    """Aktualisiert den Countdown im Event-Post periodisch."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = _now_utc()
+        for mid_s, ev in list(active_events.items()):
+            try:
+                dt_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
+            except Exception:
+                continue
+            # nur bis 48h in die Zukunft und bis 2h nach Start updaten
+            if dt_utc - now > timedelta(hours=48):
+                continue
+            if now > dt_utc + timedelta(hours=2):
+                continue
+            guild = bot.get_guild(int(ev.get('guild_id')))
+            if not guild:
+                continue
+            try:
+                await update_event_post(guild, int(mid_s))
+            except Exception:
+                pass
+        await asyncio.sleep(60)
+
 
 async def reminder_task():
     await bot.wait_until_ready()
@@ -1525,10 +1606,59 @@ async def reminder_task():
         await asyncio.sleep(60)
 
 
+class AFKConfirmView(discord.ui.View):
+    def __init__(self, event_message_id: int, user_id: int, timeout: int = 60 * 30):
+        super().__init__(timeout=timeout)
+        self.event_message_id = int(event_message_id)
+        self.user_id = int(user_id)
+
+    @discord.ui.button(label="✅ Dabei", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # nur der richtige User darf klicken
+        if interaction.user is None or interaction.user.id != self.user_id:
+            await interaction.response.send_message("⛔ Nicht für dich.", ephemeral=True)
+            return
+
+        ev = active_events.get(_event_key(self.event_message_id))
+        if not ev:
+            await interaction.response.send_message("⚠️ Event nicht mehr gefunden.")
+            return
+
+        st = ev.setdefault(
+            "afk_state",
+            {"confirmed": [], "started": False, "finished": False, "last_prompt_at": None, "soft_warned": []},
+        )
+        confirmed = set(int(x) for x in st.get("confirmed", []))
+        confirmed.add(self.user_id)
+        st["confirmed"] = list(confirmed)
+        ev["afk_state"] = st
+        active_events[_event_key(self.event_message_id)] = ev
+        await safe_save()
+
+        try:
+            ev["afk_log"] = "✅ bestätigt" if ev.get("afk_log") in (None, "") else ev.get("afk_log")
+        except Exception:
+            pass
+
+        try:
+            guild = bot.get_guild(int(ev.get('guild_id')))
+            if guild:
+                await update_event_post(guild, self.event_message_id)
+        except Exception:
+            pass
+
+        await interaction.response.send_message("✅ Bestätigt. Du wirst nicht gekickt.")
+
+
 async def afk_task():
-    """AFK-Check per PN (DM): startet 30 Min vorher, läuft 20 Min, pingt alle 5 Min.
-    Bestätigung per ✅ Reaktion auf die DM. Wer bestätigt hat, wird nicht mehr gepingt.
-    Nach Ablauf: Slots von Nicht-Bestätigten werden freigegeben + WL rückt nach.
+    """AFK-Check per DM.
+
+    Ablauf:
+    - Start X Minuten vor Event
+    - Dauer Y Minuten
+    - Ping alle Z Minuten per DM mit Button "✅ Dabei".
+    - Soft-Warnung kurz vor Kick.
+    - Nach Ablauf: wer nicht bestätigt hat, wird aus Main-Slots entfernt und Warteliste rückt nach.
     """
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -1536,6 +1666,7 @@ async def afk_task():
         for mid_s, ev in list(active_events.items()):
             if ev.get("afk_enabled", True) is False:
                 continue
+
             try:
                 dt_utc = _ensure_utc(datetime.fromisoformat(ev["event_time_utc"]))
             except Exception:
@@ -1543,13 +1674,25 @@ async def afk_task():
             if dt_utc <= now:
                 continue
 
-            window_start = dt_utc - timedelta(minutes=AFK_START_MIN_BEFORE)
-            window_end = window_start + timedelta(minutes=AFK_DURATION_MIN)
-            interval = timedelta(minutes=AFK_INTERVAL_MIN)
+            cfg = ev.get("afk_cfg") or {
+                "start_min_before": AFK_START_MIN_BEFORE,
+                "duration_min": AFK_DURATION_MIN,
+                "interval_min": AFK_INTERVAL_MIN,
+                "soft_warn_min_before_kick": AFK_SOFT_WARN_MIN_BEFORE_KICK,
+            }
+            start_min = int(cfg.get("start_min_before", AFK_START_MIN_BEFORE))
+            dur_min = int(cfg.get("duration_min", AFK_DURATION_MIN))
+            int_min = int(cfg.get("interval_min", AFK_INTERVAL_MIN))
+            soft_warn_min = int(cfg.get("soft_warn_min_before_kick", AFK_SOFT_WARN_MIN_BEFORE_KICK))
+
+            window_start = dt_utc - timedelta(minutes=start_min)
+            window_end = window_start + timedelta(minutes=dur_min)
+            interval = timedelta(minutes=max(1, int_min))
+            soft_warn_at = window_end - timedelta(minutes=max(0, soft_warn_min))
 
             st = ev.setdefault(
                 "afk_state",
-                {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None},
+                {"confirmed": [], "started": False, "finished": False, "last_prompt_at": None, "soft_warned": []},
             )
             if st.get("finished"):
                 continue
@@ -1567,44 +1710,63 @@ async def afk_task():
             if not st.get("started"):
                 st["started"] = True
                 st["last_prompt_at"] = None
+                ev["afk_log"] = "läuft…"
+                active_events[mid_s] = ev
+                await safe_save()
+                try:
+                    await update_event_post(guild, int(mid_s))
+                except Exception:
+                    pass
+
+            # Soft-Warnung kurz vor Kick
+            soft_warned = set(int(x) for x in st.get("soft_warned", []))
+            if soft_warn_min > 0 and unanswered and now >= soft_warn_at:
+                for uid in list(unanswered):
+                    if uid in soft_warned:
+                        continue
+                    try:
+                        member = guild.get_member(uid) or await guild.fetch_member(uid)
+                        await member.send(
+                            f"⚠️ **AFK-Check Warnung** für **{ev.get('title','(Event)')}**\n"
+                            f"Wenn du nicht bestätigst, wirst du gleich aus dem Slot entfernt.\n"
+                            f"(Event-Start: {format_dt_local(dt_utc)})"
+                        )
+                        soft_warned.add(uid)
+                    except Exception:
+                        pass
+                st["soft_warned"] = list(soft_warned)
+                ev["afk_state"] = st
+                active_events[mid_s] = ev
+                await safe_save()
 
             # Ende des Fensters: freigeben
-                        
             if now >= window_end:
                 removed = set()
-                promoted: list[tuple[str, int]] = []
+                promoted = []
                 if unanswered:
                     for uid in list(unanswered):
                         _slot_remove_user(ev, uid)
                         removed.add(uid)
                     promoted = _slot_promote_waitlist(ev)
-                    active_events[mid_s] = ev
-                    await safe_save()
-                    try:
-                        await update_event_post(guild, int(mid_s))
-                    except Exception:
-                        pass
-            
+
                 st["finished"] = True
                 st["confirmed"] = list(confirmed)
                 ev["afk_state"] = st
+
+                if removed:
+                    ev["afk_log"] = f"abgeschlossen: {len(confirmed)}/{len(participants)} bestätigt, {len(removed)} entfernt"
+                else:
+                    ev["afk_log"] = f"abgeschlossen: {len(confirmed)}/{len(participants)} bestätigt"
+
                 active_events[mid_s] = ev
                 await safe_save()
-            
-                # Infos in den Event-Thread
                 try:
-                    if removed:
-                        await post_to_event_thread(guild, ev, "🚪 Slots freigegeben: " + ", ".join([f"<@{u}>" for u in removed]))
-                    if promoted:
-                        await post_to_event_thread(guild, ev, "\n".join([f"➕ Nachgerückt {emo}: <@{uid}>" for emo, uid in promoted]))
-                    if not removed:
-                        await post_to_event_thread(guild, ev, "✅ AFK-Check vorbei: alle bestätigt.")
-                    else:
-                        await post_to_event_thread(guild, ev, f"🚪 AFK-Check vorbei: **{len(removed)}** Slot(s) freigegeben.")
+                    await update_event_post(guild, int(mid_s))
                 except Exception:
                     pass
                 continue
-            
+
+            # Ping-Logik
             last_prompt_at = st.get("last_prompt_at")
             last_dt = None
             if isinstance(last_prompt_at, str):
@@ -1617,17 +1779,13 @@ async def afk_task():
                 for uid in list(unanswered):
                     try:
                         member = guild.get_member(uid) or await guild.fetch_member(uid)
-                        dm = await member.create_dm()
-                        dm_msg = await dm.send(
+                        view = AFKConfirmView(event_message_id=int(mid_s), user_id=int(uid))
+                        await member.send(
                             f"🕵️ **AFK-Check** für **{ev.get('title','(Event)')}**\n"
                             f"Start: **{format_dt_local(dt_utc)}**\n"
-                            f"Bitte reagiere mit ✅, wenn du dabei bist."
+                            f"Bitte bestätige mit dem Button, wenn du dabei bist.",
+                            view=view,
                         )
-                        try:
-                            await dm_msg.add_reaction("✅")
-                        except Exception:
-                            pass
-                        afkdmprompts[int(dm_msg.id)] = (int(mid_s), int(uid))
                     except Exception:
                         pass
 
@@ -1640,6 +1798,7 @@ async def afk_task():
 
 
 async def cleanup_task():
+
     """Löscht Event-Post + Thread standardmäßig 2h nach Start (wenn nicht deaktiviert)."""
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -1691,6 +1850,8 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    if not afk_loop.is_running():
+        afk_loop.start()
     try:
         # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
@@ -1709,6 +1870,7 @@ async def on_ready():
     print(f"🤖 SlotBot online als {bot.user}")
 
     if not TASKS_STARTED:
+        BACKGROUND_TASKS["countdown"] = bot.loop.create_task(countdown_task(), name="slotbot_countdown")
         BACKGROUND_TASKS["reminder"] = bot.loop.create_task(reminder_task(), name="slotbot_reminder")
         BACKGROUND_TASKS["afk"] = bot.loop.create_task(afk_task(), name="slotbot_afk")
         BACKGROUND_TASKS["cleanup"] = bot.loop.create_task(cleanup_task(), name="slotbot_cleanup")
@@ -1740,3 +1902,66 @@ if __name__ == "__main__":
         except Exception as e:
             print("❌ Discord Bot crashed:", repr(e))
             time.sleep(60)
+
+
+# ================= AFK & REMINDER SYSTEM =================
+
+AFK_REMINDER_MINUTES = 60
+AFK_CHECK_START_MINUTES = 30
+AFK_CHECK_DURATION_MINUTES = 20
+
+afk_pending = {}  # event_id -> {user_id: deadline}
+
+async def send_dm(user: discord.User, text: str):
+    try:
+        await user.send(text)
+    except Exception:
+        pass
+
+async def run_reminder_and_afk(bot):
+    now = _now_utc()
+    for ev in events.values():
+        try:
+            starts_at = _ensure_utc(datetime.fromisoformat(ev.get("starts_at")))
+        except Exception:
+            continue
+
+        minutes_to_start = (starts_at - now).total_seconds() / 60
+
+        # 🔔 60 min reminder
+        if 59 <= minutes_to_start <= 60 and not ev.get("reminder_sent"):
+            ev["reminder_sent"] = True
+            for uid in ev.get("participants", []):
+                user = bot.get_user(uid)
+                if user:
+                    await send_dm(user, f"🔔 **Reminder**: Dein Event startet in 60 Minuten.")
+
+        # ⏰ AFK check window
+        if AFK_CHECK_START_MINUTES >= minutes_to_start > (AFK_CHECK_START_MINUTES - AFK_CHECK_DURATION_MINUTES):
+            pending = afk_pending.setdefault(ev["id"], {})
+            for uid in list(ev.get("participants", [])):
+                if uid in pending:
+                    continue
+                user = bot.get_user(uid)
+                if not user:
+                    continue
+                pending[uid] = now + timedelta(minutes=AFK_CHECK_DURATION_MINUTES)
+                await send_dm(
+                    user,
+                    "⏰ **AFK-Check**\nBitte bestätige deine Teilnahme mit **/afk_ok**."
+                )
+
+        # ❌ AFK timeout
+        pending = afk_pending.get(ev["id"], {})
+        for uid, deadline in list(pending.items()):
+            if now >= deadline:
+                pending.pop(uid, None)
+                if uid in ev.get("participants", []):
+                    ev["participants"].remove(uid)
+                    update_event_message(ev)
+
+@tasks.loop(minutes=1)
+async def afk_loop():
+    await run_reminder_and_afk(bot)
+
+# =========================================================
