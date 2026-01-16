@@ -25,6 +25,7 @@ import pytz
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.ext import tasks
 from flask import Flask
 
 # -------------------- Config --------------------
@@ -1850,7 +1851,7 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
-    if not afk_loop.is_running():
+    if 'afk_loop' in globals() and not afk_loop.is_running():
         afk_loop.start()
     try:
         # Schnellere Command-Aktivierung: pro Guild syncen
