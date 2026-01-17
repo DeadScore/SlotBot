@@ -66,61 +66,6 @@ intents.reactions = True
 intents.messages = True
 intents.message_content = False  # not needed for slash + reactions
 
-
-# ------------------------------
-# THREAD HELPERS (added)
-# ------------------------------
-async def _safe_create_thread_for_message(msg: discord.Message, title: str) -> discord.Thread | None:
-    """
-    Creates (or returns) a public thread for the given message, safely.
-    If thread creation fails (permissions / limits), returns None and the bot continues.
-    """
-    try:
-        # If message already has an attached thread, use it
-        if getattr(msg, "thread", None):
-            return msg.thread
-        # Create a public thread tied to the message
-        tname = title.strip()[:90] if title else "Event"
-        return await msg.create_thread(name=f"🧵 {tname}", auto_archive_duration=1440)
-    except Exception as e:
-        try:
-            log.warning("Thread create failed for msg %s: %s", getattr(msg, "id", "?"), e)
-        except Exception:
-            pass
-        return None
-
-async def ensure_event_thread(ev: dict, channel: discord.abc.Messageable, msg: discord.Message, title: str) -> discord.Thread | None:
-    """
-    Ensures ev has a usable thread_id. If missing, tries to create thread from the event post message.
-    Returns Thread or None.
-    """
-    # If stored thread_id exists, try to fetch it
-    tid = ev.get("thread_id")
-    if tid:
-        try:
-            th = bot.get_channel(tid)
-            if isinstance(th, discord.Thread):
-                return th
-            # In some cases threads aren't cached
-            fetched = await bot.fetch_channel(tid)
-            if isinstance(fetched, discord.Thread):
-                return fetched
-        except Exception:
-            pass
-
-    # Try creating from message
-    th = await _safe_create_thread_for_message(msg, title)
-    if th:
-        ev["thread_id"] = th.id
-        try:
-            # persist if your code has a save() helper
-            if "save_events" in globals() and callable(globals().get("save_events")):
-                save_events()
-        except Exception:
-            pass
-    return th
-
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------- Helpers / Persistence --------------------
@@ -362,11 +307,16 @@ SLOT_SPEC_RE = re.compile(
 )
 
 def _resolve_colon_name_to_guild_emoji(emo: str, guild: Optional[discord.Guild]) -> Optional[str]:
+    """Resolves :name: to a real guild emoji string.
+
+    Case-insensitive on purpose, because users will type :Tank: and you still want :tank:.
+    """
     if not guild:
         return None
     name = emo.strip(":")
+    name_l = name.lower()
     for e in guild.emojis:
-        if e.name == name:
+        if (e.name or "").lower() == name_l:
             return str(e)
     return None
 
