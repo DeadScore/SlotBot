@@ -1745,3 +1745,107 @@ if __name__ == "__main__":
         except Exception as e:
             print("❌ Discord Bot crashed:", repr(e))
             time.sleep(60)
+
+
+# =========================
+# AFK / REMINDER / COUNTDOWN
+# =========================
+
+AFK_CHECK_ENABLED_DEFAULT = True
+AFK_CHECK_START_MINUTES = 30      # start AFK check X min before event
+AFK_CHECK_DURATION_MINUTES = 20   # AFK window duration
+AFK_SOFT_WARN_MINUTES = 10        # warn after X min without confirm
+REMINDER_BEFORE_MINUTES = 60      # reminder before event
+
+afk_state = {}  # event_id -> {user_id: confirmed(bool)}
+
+class AFKConfirmView(discord.ui.View):
+    def __init__(self, event_id: int):
+        super().__init__(timeout=None)
+        self.event_id = event_id
+
+    @discord.ui.button(label="Ich bin da ✅", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        st = afk_state.setdefault(self.event_id, {})
+        st[interaction.user.id] = True
+        await interaction.response.send_message("✅ AFK-Check bestätigt.", ephemeral=True)
+
+
+async def run_event_timers(ev: dict):
+    '''
+    Handles reminder, countdown updates, AFK check, soft-warn and kick.
+    '''
+    msg_id = ev.get("message_id")
+    ch_id = ev.get("channel_id")
+    guild = bot.get_guild(ev["guild_id"])
+    if not guild:
+        return
+    channel = guild.get_channel(ch_id)
+    if not channel:
+        return
+    try:
+        msg = await channel.fetch_message(msg_id)
+    except Exception:
+        return
+
+    start = _ensure_utc(datetime.fromisoformat(ev["start_time"]))
+
+    # --- Reminder ---
+    await asyncio.sleep(max(0, (start - timedelta(minutes=REMINDER_BEFORE_MINUTES) - _now_utc()).total_seconds()))
+    try:
+        await channel.send(f"⏰ **Reminder:** Event startet in **{REMINDER_BEFORE_MINUTES} Minuten**!")
+    except Exception:
+        pass
+
+    # --- AFK Check ---
+    await asyncio.sleep(max(0, (start - timedelta(minutes=AFK_CHECK_START_MINUTES) - _now_utc()).total_seconds()))
+    afk_state[ev["id"]] = {}
+    try:
+        await channel.send(
+            "🕒 **AFK-Check gestartet** (bitte bestätigen):",
+            view=AFKConfirmView(ev["id"])
+        )
+    except Exception:
+        pass
+
+    # Soft warn
+    await asyncio.sleep(AFK_SOFT_WARN_MINUTES * 60)
+    unconfirmed = []
+    slots = ev.get("slots", {})
+    for users in slots.values():
+        for uid in users:
+            if not afk_state.get(ev["id"], {}).get(uid):
+                unconfirmed.append(uid)
+
+    for uid in unconfirmed:
+        member = guild.get_member(uid)
+        if member:
+            try:
+                await member.send("⚠️ **AFK-Warnung:** Bitte bestätige den AFK-Check, sonst wirst du entfernt.")
+            except Exception:
+                pass
+
+    # Kick after AFK window
+    await asyncio.sleep((AFK_CHECK_DURATION_MINUTES - AFK_SOFT_WARN_MINUTES) * 60)
+    removed = []
+    for slot, users in list(slots.items()):
+        for uid in list(users):
+            if not afk_state.get(ev["id"], {}).get(uid):
+                users.remove(uid)
+                removed.append(uid)
+
+    if removed:
+        try:
+            await channel.send("❌ **AFK-Check abgeschlossen** – inaktive Spieler wurden entfernt.")
+        except Exception:
+            pass
+
+    # --- Countdown updates until start ---
+    while _now_utc() < start:
+        remaining = int((start - _now_utc()).total_seconds() // 60)
+        try:
+            await msg.edit(content=msg.content.split("\n⏳")[0] + f"\n⏳ **Start in {remaining} Minuten**")
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
