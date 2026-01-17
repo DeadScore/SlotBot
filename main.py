@@ -1856,7 +1856,9 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
-        try:
+    if 'afk_loop' in globals() and not afk_loop.is_running():
+        afk_loop.start()
+    try:
         # Schnellere Command-Aktivierung: pro Guild syncen
         for g in bot.guilds:
             try:
@@ -1906,3 +1908,66 @@ if __name__ == "__main__":
         except Exception as e:
             print("❌ Discord Bot crashed:", repr(e))
             time.sleep(60)
+
+
+# ================= AFK & REMINDER SYSTEM =================
+
+AFK_REMINDER_MINUTES = 60
+AFK_CHECK_START_MINUTES = 30
+AFK_CHECK_DURATION_MINUTES = 20
+
+afk_pending = {}  # event_id -> {user_id: deadline}
+
+async def send_dm(user: discord.User, text: str):
+    try:
+        await user.send(text)
+    except Exception:
+        pass
+
+async def run_reminder_and_afk(bot):
+    now = _now_utc()
+    for ev in events.values():
+        try:
+            starts_at = _ensure_utc(datetime.fromisoformat(ev.get("starts_at")))
+        except Exception:
+            continue
+
+        minutes_to_start = (starts_at - now).total_seconds() / 60
+
+        # 🔔 60 min reminder
+        if 59 <= minutes_to_start <= 60 and not ev.get("reminder_sent"):
+            ev["reminder_sent"] = True
+            for uid in ev.get("participants", []):
+                user = bot.get_user(uid)
+                if user:
+                    await send_dm(user, f"🔔 **Reminder**: Dein Event startet in 60 Minuten.")
+
+        # ⏰ AFK check window
+        if AFK_CHECK_START_MINUTES >= minutes_to_start > (AFK_CHECK_START_MINUTES - AFK_CHECK_DURATION_MINUTES):
+            pending = afk_pending.setdefault(ev["id"], {})
+            for uid in list(ev.get("participants", [])):
+                if uid in pending:
+                    continue
+                user = bot.get_user(uid)
+                if not user:
+                    continue
+                pending[uid] = now + timedelta(minutes=AFK_CHECK_DURATION_MINUTES)
+                await send_dm(
+                    user,
+                    "⏰ **AFK-Check**\nBitte bestätige deine Teilnahme mit **/afk_ok**."
+                )
+
+        # ❌ AFK timeout
+        pending = afk_pending.get(ev["id"], {})
+        for uid, deadline in list(pending.items()):
+            if now >= deadline:
+                pending.pop(uid, None)
+                if uid in ev.get("participants", []):
+                    ev["participants"].remove(uid)
+                    update_event_message(ev)
+
+@tasks.loop(minutes=1)
+async def afk_loop():
+    await run_reminder_and_afk(bot)
+
+# =========================================================
