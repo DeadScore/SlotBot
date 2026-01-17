@@ -1,3 +1,5 @@
+_LOOPS_STARTED = False
+
 # SlotBot – rebuilt stable main.py
 # Features:
 # - Flask health endpoint for Render (PORT)
@@ -1710,6 +1712,7 @@ async def cleanup_task():
 
 @bot.event
 async def on_ready():
+    global _LOOPS_STARTED
     # Wird bei Reconnect erneut aufgerufen – wir starten Loops nur einmal.
     global _LOOPS_STARTED
     print(f"✅ Eingeloggt als {bot.user} (ID: {bot.user.id})")
