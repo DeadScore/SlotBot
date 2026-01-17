@@ -1,3 +1,4 @@
+import os
 # ================================
 # SlotBot – FULL main.py
 # ================================
@@ -13,7 +14,7 @@ import random
 # ================================
 # CONFIG
 # ================================
-TOKEN = "DEIN_BOT_TOKEN_HIER"
+TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_IDS = {404173735130562562}
 
 EVENT_AUTO_DELETE_HOURS = 2
@@ -316,4 +317,12 @@ async def stop_roll(interaction: discord.Interaction):
 # ================================
 # RUN
 # ================================
-bot.run(TOKEN)
+
+# =========================
+# Bot Start (SAFE)
+# =========================
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render Environment Variable).")
+    bot.run(TOKEN)
