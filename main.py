@@ -200,10 +200,6 @@ def format_dt_local(dt_utc) -> str:
     weekday = GER_WEEKDAYS.get(dt_local.weekday(), "")
     return f"**{weekday}**, {dt_local.strftime('%d.%m.%Y %H:%M')}"
 
-
-
-    return dt_local.strftime("%d.%m.%Y %H:%M")
-
 def safe_int(x, default=None):
     try:
         return int(x)
@@ -380,6 +376,35 @@ def _parse_slots_spec(spec: str, guild: Optional[discord.Guild]) -> Optional[Dic
         return None
     return slots
 
+
+# Lightweight parser for /event_edit slots argument (emoji:count).
+# Returns dict {emoji: limit}. Accepts unicode emoji or custom emoji (<:name:id>).
+# Note: :name: is not a valid reaction emoji, so we reject it here.
+def parse_slots(spec: str):
+    if not spec:
+        return None
+    s=spec.strip()
+    if not s:
+        return None
+    out={}
+    consumed=0
+    for m in SLOT_SPEC_RE.finditer(s):
+        between=s[consumed:m.start()]
+        if between.strip():
+            return None
+        consumed=m.end()
+        emo=m.group('emo').strip()
+        num=int(m.group('num'))
+        if num < 0 or num > 99:
+            return None
+        if COLON_NAME_RE.match(emo):
+            return None
+        if not (CUSTOM_EMOJI_RE.match(emo) or len(emo) <= 64):
+            return None
+        out[emo]=num
+    if s[consumed:].strip():
+        return None
+    return out or None
 def _default_slots_dict() -> Dict[str, dict]:
 
     slots = {}
@@ -425,7 +450,7 @@ async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
         tid = ev.get("thread_id")
         if not tid:
             return
-        th = guild.get_thread(int(tid))
+        th = interaction.guild.get_thread(int(tid))
         if th is None:
             ch = await bot.fetch_channel(int(tid))
             if isinstance(ch, discord.Thread):
@@ -451,7 +476,7 @@ async def get_or_create_thread(message: discord.Message, ev: dict) -> Optional[d
     # Try stored thread
     tid = safe_int(ev.get("thread_id"))
     if tid:
-        th = message.guild.get_thread(tid)
+        th = message.interaction.guild.get_thread(tid)
         if th:
             return th
         try:
@@ -911,7 +936,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = guild.get_thread(int(tid))
+                    thread = interaction.interaction.guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -929,7 +954,7 @@ async def event_edit(
                 tid = ev.get("thread_id")
                 thread = None
                 if tid:
-                    thread = guild.get_thread(int(tid))
+                    thread = interaction.interaction.guild.get_thread(int(tid))
                     if thread is None:
                         ch = await bot.fetch_channel(int(tid))
                         if isinstance(ch, discord.Thread):
@@ -937,7 +962,7 @@ async def event_edit(
                 if thread:
                     lines = []
                     for emo, uid in promoted:
-                        member = guild.get_member(int(uid))
+                        member = interaction.interaction.interaction.guild.get_member(int(uid))
                         name = member.display_name if member else f"<@{uid}>"
                         lines.append(f"{emo} → {name}")
                     if lines:
@@ -1366,7 +1391,7 @@ async def event_delete_cmd(interaction: discord.Interaction, event: str):
     try:
         tid = ev.get("thread_id")
         if tid:
-            th = guild.get_thread(int(tid))
+            th = interaction.guild.get_thread(int(tid))
             if th is None:
                 ch = await bot.fetch_channel(int(tid))
                 if isinstance(ch, discord.Thread):
@@ -1533,7 +1558,7 @@ async def reminder_task():
                     if uid in sent:
                         continue
                     try:
-                        member = guild.get_member(uid) or await guild.fetch_member(uid)
+                        member = interaction.guild.get_member(uid) or await guild.fetch_member(uid)
                         await member.send(f"⏰ Dein Event **{ev.get('title','(Event)')}** startet in **{REMINDER_MIN_BEFORE} Minuten**!")
                         sent.add(uid)
                         changed = True
@@ -1637,7 +1662,7 @@ async def afk_task():
             if unanswered and (last_dt is None or now - last_dt >= interval):
                 for uid in list(unanswered):
                     try:
-                        member = guild.get_member(uid) or await guild.fetch_member(uid)
+                        member = interaction.guild.get_member(uid) or await guild.fetch_member(uid)
                         dm = await member.create_dm()
                         dm_msg = await dm.send(
                             f"🕵️ **AFK-Check** für **{ev.get('title','(Event)')}**\n"
@@ -1682,7 +1707,7 @@ async def cleanup_task():
                 try:
                     tid = ev.get("thread_id")
                     if tid:
-                        th = guild.get_thread(int(tid))
+                        th = interaction.guild.get_thread(int(tid))
                         if th:
                             await th.delete()
                         else:
@@ -1713,16 +1738,27 @@ async def cleanup_task():
 @bot.event
 async def on_ready():
     global _LOOPS_STARTED
-    # Wird bei Reconnect erneut aufgerufen – wir starten Loops nur einmal.
-    global _LOOPS_STARTED
     print(f"✅ Eingeloggt als {bot.user} (ID: {bot.user.id})")
-    if not _LOOPS_STARTED:
-        _LOOPS_STARTED = True
-        # Hintergrund-Loops (AFK/Reminder/Countdown/Autodelete)
-        if not event_loop.is_running():
-            event_loop.start()
-        if not roll_loop.is_running():
-            roll_loop.start()
+
+    # Wird bei Reconnect erneut aufgerufen – wir starten Background-Tasks nur einmal.
+    if _LOOPS_STARTED:
+        return
+    _LOOPS_STARTED = True
+
+    # Start background tasks (reminder, afk, cleanup, roll watcher)
+    try:
+        if BACKGROUND_TASKS.get('reminder') is None or BACKGROUND_TASKS['reminder'].done():
+            BACKGROUND_TASKS['reminder'] = asyncio.create_task(reminder_task(), name='reminder_task')
+        if BACKGROUND_TASKS.get('afk') is None or BACKGROUND_TASKS['afk'].done():
+            BACKGROUND_TASKS['afk'] = asyncio.create_task(afk_task(), name='afk_task')
+        if BACKGROUND_TASKS.get('cleanup') is None or BACKGROUND_TASKS['cleanup'].done():
+            BACKGROUND_TASKS['cleanup'] = asyncio.create_task(cleanup_task(), name='cleanup_task')
+        # Roll watcher
+        if BACKGROUND_TASKS.get('roll_watcher') is None or BACKGROUND_TASKS['roll_watcher'].done():
+            BACKGROUND_TASKS['roll_watcher'] = asyncio.create_task(roll_watcher_task(), name='roll_watcher_task')
+        print('🔁 Background-Tasks gestartet.')
+    except Exception as e:
+        print(f"⚠️ Konnte Background-Tasks nicht starten: {e}")
 
 # -------------------- Main --------------------
 
