@@ -1,4 +1,3 @@
-
 # SlotBot – FINAL stable main.py (Web Service + Persistenz)
 # Features:
 # - Flask health endpoint for Render (PORT)
@@ -150,11 +149,14 @@ async def create_event(interaction: discord.Interaction, titel: str, zeit: str):
     if not interaction.guild:
         return await interaction.response.send_message("Nur im Server.", ephemeral=True)
 
+    # 🔧 FIX: sofort antworten, sonst Discord-Timeout
+    await interaction.response.defer(ephemeral=True)
+
     try:
         local = TZ.localize(datetime.strptime(zeit, "%d.%m.%Y %H:%M"))
         utc = local.astimezone(pytz.utc)
     except Exception:
-        return await interaction.response.send_message("Zeitformat: DD.MM.YYYY HH:MM", ephemeral=True)
+        return await interaction.followup.send("Zeitformat: DD.MM.YYYY HH:MM")
 
     ev = {
         "guild_id": interaction.guild.id,
@@ -168,13 +170,16 @@ async def create_event(interaction: discord.Interaction, titel: str, zeit: str):
         "auto_delete_hours": AUTO_DELETE_HOURS_DEFAULT,
     }
 
-    msg = await interaction.channel.send(f"📣 **{titel}**\n⏰ {format_local(ev['event_time_utc'])}")
+    msg = await interaction.channel.send(
+        f"📣 **{titel}**\n⏰ {format_local(ev['event_time_utc'])}"
+    )
     for e in ev["slots"]:
         await msg.add_reaction(e)
 
     active_events[_event_key(msg.id)] = ev
     await safe_save()
-    await interaction.response.send_message("✅ Event erstellt.", ephemeral=True)
+
+    await interaction.followup.send("✅ Event erstellt.")
 
 # -------------------- Reactions --------------------
 
@@ -215,6 +220,7 @@ async def on_ready():
     if not _LOOPS_STARTED:
         _LOOPS_STARTED = True
         bot.loop.create_task(reminder_task())
+        await bot.tree.sync()
 
 # -------------------- Main --------------------
 
