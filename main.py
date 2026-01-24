@@ -616,6 +616,7 @@ async def event_create(
     auto_delete: Optional[str] = None,
     anmerkung: Optional[str] = None,
 ):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True)
         return
@@ -792,7 +793,7 @@ async def event_edit(
 
     # Slots (mit Erhalt der bestehenden Anmeldungen)
     if slots is not None:
-        new_slots = parse_slots(slots)
+        new_slots = _parse_slots_spec(slots, interaction.guild)
         if not new_slots:
             await interaction.response.send_message("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True)
             return
@@ -1151,6 +1152,7 @@ async def roll(interaction: discord.Interaction):
 
 @bot.tree.command(name="stop_roll", description="Stoppt den aktuellen Roll und zieht einen Gewinner.")
 async def stop_roll(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
     if interaction.guild is None or interaction.channel is None:
         await interaction.response.send_message("❌ Nur auf einem Server-Kanal.", ephemeral=True)
         return
@@ -1734,9 +1736,4 @@ if __name__ == "__main__":
     flask_thread.start()
 
     # Discord-Bot blockierend starten. Bei Login-Problemen (429/Cloudflare) nicht crash-loop-en.
-    while True:
-        try:
-            bot.run(DISCORD_TOKEN)
-        except Exception as e:
-            print("❌ Discord Bot crashed:", repr(e))
-            time.sleep(60)
+    bot.run(DISCORD_TOKEN)
