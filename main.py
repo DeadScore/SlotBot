@@ -27,6 +27,43 @@ from discord import app_commands
 from discord.ext import commands
 from flask import Flask
 
+
+# -------------------- Debounced Event Post Updates --------------------
+# Reduces Discord API spam (especially message edits) without removing any features.
+# All existing calls to update_event_post(...) now go through this debounced wrapper.
+import time as _slotbot_time
+import asyncio as _slotbot_asyncio
+
+_EVENT_UPDATE_QUEUE = {}
+_EVENT_UPDATE_TASKS = {}
+_EVENT_UPDATE_DELAY = 3.0  # seconds
+
+async def update_event_post(guild, message_id):
+    """Debounced wrapper around the original _update_event_post_impl.
+
+    Rationale: many actions (reactions/AFK/edits) can trigger multiple rapid updates.
+    This ensures we do at most one real edit after a short quiet period.
+    """
+    now = _slotbot_time.time()
+    _EVENT_UPDATE_QUEUE[message_id] = now
+
+    # already scheduled
+    if message_id in _EVENT_UPDATE_TASKS:
+        return
+
+    async def _worker():
+        await _slotbot_asyncio.sleep(_EVENT_UPDATE_DELAY)
+        last = _EVENT_UPDATE_QUEUE.get(message_id)
+        if last and (_slotbot_time.time() - last) >= _EVENT_UPDATE_DELAY:
+            try:
+                await _update_event_post_impl(guild, message_id)
+            except Exception as e:
+                print("⚠️ debounced update_event_post failed:", repr(e))
+            _EVENT_UPDATE_QUEUE.pop(message_id, None)
+            _EVENT_UPDATE_TASKS.pop(message_id, None)
+
+    _EVENT_UPDATE_TASKS[message_id] = _slotbot_asyncio.create_task(_worker())
+
 # -------------------- Config --------------------
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
@@ -449,7 +486,7 @@ async def get_or_create_thread(message: discord.Message, ev: dict) -> Optional[d
         print(f"⚠️ thread create failed: {e}")
         return None
 
-async def update_event_post(guild: discord.Guild, message_id: int):
+async def _update_event_post_impl(guild: discord.Guild, message_id: int):
     ev = active_events.get(_event_key(message_id))
     if not ev:
         return
