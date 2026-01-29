@@ -9,7 +9,6 @@
 # - Reminder: 60 minutes before start (DM once per user)
 # - AFK check: starts 30 min before start, lasts 20 min, prompts every 5 min in thread; ✅ confirms; no confirm => auto-release slot, promote waitlist
 # - /event_reset_notifications: clears sent reminder flags for an event
-# - No points system
 
 import os
 import re
@@ -1727,19 +1726,38 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    print("🚀 Starte SlotBot + Flask (stabil) ...")
+    print("🚀 Starte SlotBot + Flask (Web Service stabil) ...")
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN ist nicht gesetzt (Render → Environment Variables).")
 
-    def run_flask():
-        port = int(os.environ.get("PORT", "10000"))
-        try:
-            flask_app.run(host="0.0.0.0", port=port)
-        except Exception as e:
-            print("❌ Flask crashed:", e)
+    # Discord in separatem Thread starten, damit Flask (Port-Bind) immer weiterläuft.
+    # Wichtig: Bei 429/Cloudflare wird NICHT der Prozess beendet -> kein Render-Restart-Loop.
+    async def _start_discord_bot_forever():
+        while True:
+            try:
+                print("🤖 Discord: starte Login ...")
+                await bot.start(DISCORD_TOKEN)
+                # bot.start endet nur bei Disconnect/Shutdown
+                print("⚠️ Discord: bot.start() beendet (Disconnect). Reconnect in 30s ...")
+                await asyncio.sleep(30)
+            except discord.HTTPException as e:
+                # discord.py setzt status, bei global RL / Cloudflare häufig 429
+                if getattr(e, "status", None) == 429:
+                    print("⏳ Discord: rate limited / temporär geblockt (429). Warte 15 Minuten ...")
+                    await asyncio.sleep(15 * 60)
+                else:
+                    print("❌ Discord HTTPException:", e)
+                    await asyncio.sleep(60)
+            except Exception as e:
+                print("❌ Discord Fehler:", e)
+                await asyncio.sleep(60)
 
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    def _run_discord_thread():
+        asyncio.run(_start_discord_bot_forever())
 
-    # Discord-Bot blockierend starten (kein Crash-Loop -> verhindert Login-Spam/429).
-    bot.run(DISCORD_TOKEN)
+    discord_thread = threading.Thread(target=_run_discord_thread, daemon=True)
+    discord_thread.start()
+
+    # Flask muss im MAIN-Thread laufen, damit Render den Port sicher erkennt.
+    port = int(os.environ.get("PORT", "10000"))
+    flask_app.run(host="0.0.0.0", port=port)
