@@ -1741,10 +1741,5 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Discord-Bot blockierend starten. Bei Login-Problemen (429/Cloudflare) nicht crash-loop-en.
-    while True:
-        try:
-            bot.run(DISCORD_TOKEN)
-        except Exception as e:
-            print("❌ Discord Bot crashed:", repr(e))
-            time.sleep(60)
+    # Discord-Bot blockierend starten (kein Crash-Loop -> verhindert Login-Spam/429).
+    bot.run(DISCORD_TOKEN)
