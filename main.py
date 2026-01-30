@@ -22,6 +22,16 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import pytz
 import discord
+
+async def safe_reply(interaction: discord.Interaction, content=None, *, ephemeral=True):
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(content, ephemeral=ephemeral)
+    except Exception as e:
+        print('⚠️ safe_reply Fehler:', e)
+
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
