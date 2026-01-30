@@ -412,9 +412,9 @@ async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
     """Postet eine Nachricht in den Event-Thread (falls vorhanden)."""
     try:
         tid = ev.get("thread_id")
-        if not tid:
-# FIXED: removed illegal top-level return
-        th = guild.get_thread(int(tid))
+        if tid:
+            th = guild.get_thread(int(tid))
+
         if th is None:
             ch = await bot.fetch_channel(int(tid))
             if isinstance(ch, discord.Thread):
