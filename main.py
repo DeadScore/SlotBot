@@ -1,6 +1,5 @@
-# SlotBot - Clean Rebuild (Option A)
-# Web Service (Flask) + Discord Slash Commands (interaction-safe)
-# Python 3.11 + discord.py 2.6.x
+# SlotBot - Robust Render Build
+# Flask health endpoint + discord.py 2.6.x Slash Commands + persistent buttons (per-event custom_id)
 
 import os
 import json
@@ -23,8 +22,12 @@ PORT = int(os.environ.get("PORT", "10000"))
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "").strip()
 DATA_FILE = Path("events.json")
 
+# Optional: speed up slash command sync during testing (set to your guild/server id)
+DEV_GUILD_ID = os.environ.get("DEV_GUILD_ID", "").strip()
+DEV_GUILD = discord.Object(id=int(DEV_GUILD_ID)) if DEV_GUILD_ID.isdigit() else None
+
 # =========================
-# Flask (Render Web Service requirement)
+# Flask (Render Web Service)
 # =========================
 app = Flask("slotbot")
 
@@ -33,7 +36,7 @@ def index():
     return "SlotBot is running.", 200
 
 def run_flask():
-    # Use reloader OFF to avoid double-start
+    # reloader OFF to avoid double-start
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 # =========================
@@ -65,9 +68,7 @@ intents.guilds = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-_synced = False
 _scheduler_task: Optional[asyncio.Task] = None
-_flask_started = False
 
 # =========================
 # Time helpers
@@ -90,12 +91,12 @@ def parse_dt_utc(dt_str: str) -> datetime:
         return datetime.fromtimestamp(int(s), tz=timezone.utc)
 
     s = s.replace("Z", "+00:00")
-    # common 'YYYY-MM-DD HH:MM'
     try:
         if "T" not in s and len(s) <= 16:
             return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
     except Exception:
         pass
+
     try:
         return datetime.fromisoformat(s).astimezone(timezone.utc)
     except Exception:
@@ -109,7 +110,6 @@ async def safe_defer(interaction: discord.Interaction, *, ephemeral: bool) -> No
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=ephemeral, thinking=True)
     except Exception as e:
-        # Already acknowledged or expired
         print("⚠️ defer failed:", e)
 
 async def safe_send(
@@ -120,7 +120,6 @@ async def safe_send(
     view: Optional[discord.ui.View] = None,
     ephemeral: bool = False,
 ) -> None:
-    """Sends exactly one response path that won't hang interactions."""
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=ephemeral)
@@ -130,7 +129,7 @@ async def safe_send(
         print("⚠️ send failed:", e)
 
 # =========================
-# Discord fetch helpers (rate-limit friendly)
+# Discord fetch helpers
 # =========================
 async def fetch_channel(guild: discord.Guild, channel_id: int):
     ch = guild.get_channel(channel_id)
@@ -216,100 +215,124 @@ async def refresh_event_message(guild: discord.Guild, ev: Dict[str, Any]) -> Non
         print("⚠️ message edit failed:", e)
 
 # =========================
-# UI View
+# UI View (IMPORTANT: per-event custom_id)
 # =========================
+def cid(action: str, ev_id: str) -> str:
+    # Unique custom_id per event to prevent persistent-view collisions
+    return f"slotbot:{action}:{ev_id}"
+
 class EventView(discord.ui.View):
     def __init__(self, ev_id: str):
-        super().__init__(timeout=None)  # persistent
+        super().__init__(timeout=None)
         self.ev_id = ev_id
 
-    @discord.ui.button(label="✅ Join", style=discord.ButtonStyle.success, custom_id="slotbot_join")
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.add_item(discord.ui.Button(label="✅ Join", style=discord.ButtonStyle.success, custom_id=cid("join", ev_id)))
+        self.add_item(discord.ui.Button(label="🚪 Leave", style=discord.ButtonStyle.secondary, custom_id=cid("leave", ev_id)))
+        self.add_item(discord.ui.Button(label="🟡 AFK-Check", style=discord.ButtonStyle.primary, custom_id=cid("afk", ev_id)))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Always allow; we route in on_interaction below
+        return True
+
+# Route button presses centrally (simpler + safe with per-event ids)
+@client.event
+async def on_interaction(interaction: discord.Interaction):
+    try:
+        if interaction.type != discord.InteractionType.component:
+            return
+
+        data = interaction.data or {}
+        custom_id = data.get("custom_id", "")
+        if not isinstance(custom_id, str) or not custom_id.startswith("slotbot:"):
+            return
+
+        parts = custom_id.split(":")
+        if len(parts) != 3:
+            return
+
+        _, action, ev_id = parts
+        ev = EVENTS.get(ev_id)
         await safe_defer(interaction, ephemeral=True)
-        ev = EVENTS.get(self.ev_id)
+
         if not ev:
-            return await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+            await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+            return
 
         uid = interaction.user.id
         participants = ev.setdefault("participants", [])
         waitlist = ev.setdefault("waitlist", [])
-        slots = int(ev["slots"])
 
-        if uid in participants:
-            return await safe_send(interaction, content="Du bist schon drin.", ephemeral=True)
-        if uid in waitlist:
-            return await safe_send(interaction, content="Du bist schon auf der Warteliste.", ephemeral=True)
+        if action == "join":
+            slots = int(ev["slots"])
+            if uid in participants:
+                await safe_send(interaction, content="Du bist schon drin.", ephemeral=True)
+                return
+            if uid in waitlist:
+                await safe_send(interaction, content="Du bist schon auf der Warteliste.", ephemeral=True)
+                return
 
-        if len(participants) < slots:
-            participants.append(uid)
-            msg_txt = "✅ Du bist dem Event beigetreten."
-        else:
-            waitlist.append(uid)
-            msg_txt = "⏳ Event voll – du bist auf der Warteliste."
+            if len(participants) < slots:
+                participants.append(uid)
+                msg_txt = "✅ Du bist dem Event beigetreten."
+            else:
+                waitlist.append(uid)
+                msg_txt = "⏳ Event voll – du bist auf der Warteliste."
 
-        save_events(EVENTS)
-        if interaction.guild:
-            await refresh_event_message(interaction.guild, ev)
-        await safe_send(interaction, content=msg_txt, ephemeral=True)
+            save_events(EVENTS)
+            if interaction.guild:
+                await refresh_event_message(interaction.guild, ev)
+            await safe_send(interaction, content=msg_txt, ephemeral=True)
+            return
 
-    @discord.ui.button(label="🚪 Leave", style=discord.ButtonStyle.secondary, custom_id="slotbot_leave")
-    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await safe_defer(interaction, ephemeral=True)
-        ev = EVENTS.get(self.ev_id)
-        if not ev:
-            return await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+        if action == "leave":
+            afk_checked = set(ev.get("afk_checked", []))
+            removed = False
 
-        uid = interaction.user.id
-        participants = ev.setdefault("participants", [])
-        waitlist = ev.setdefault("waitlist", [])
-        afk_checked = set(ev.get("afk_checked", []))
+            if uid in participants:
+                participants.remove(uid)
+                removed = True
+            if uid in waitlist:
+                waitlist.remove(uid)
+                removed = True
+            if uid in afk_checked:
+                afk_checked.discard(uid)
+                ev["afk_checked"] = list(afk_checked)
 
-        removed = False
-        if uid in participants:
-            participants.remove(uid)
-            removed = True
-        if uid in waitlist:
-            waitlist.remove(uid)
-            removed = True
-        if uid in afk_checked:
-            afk_checked.discard(uid)
+            # promote from waitlist if free slot
+            slots = int(ev["slots"])
+            if len(participants) < slots and waitlist:
+                promoted = waitlist.pop(0)
+                participants.append(promoted)
+
+            save_events(EVENTS)
+            if interaction.guild:
+                await refresh_event_message(interaction.guild, ev)
+
+            await safe_send(interaction, content=("🚪 Du bist raus." if removed else "Du warst nicht eingetragen."), ephemeral=True)
+            return
+
+        if action == "afk":
+            t = now_utc()
+            if not afk_open(ev, t):
+                await safe_send(interaction, content="⏳ AFK-Check ist erst 30 Minuten vor Start möglich.", ephemeral=True)
+                return
+
+            if uid not in participants:
+                await safe_send(interaction, content="Du bist nicht in der Teilnehmerliste.", ephemeral=True)
+                return
+
+            afk_checked = set(ev.get("afk_checked", []))
+            afk_checked.add(uid)
             ev["afk_checked"] = list(afk_checked)
+            save_events(EVENTS)
 
-        # promote from waitlist if free slot
-        slots = int(ev["slots"])
-        if len(participants) < slots and waitlist:
-            promoted = waitlist.pop(0)
-            participants.append(promoted)
+            if interaction.guild:
+                await refresh_event_message(interaction.guild, ev)
+            await safe_send(interaction, content="✅ AFK-Check bestätigt.", ephemeral=True)
+            return
 
-        save_events(EVENTS)
-        if interaction.guild:
-            await refresh_event_message(interaction.guild, ev)
-        await safe_send(interaction, content=("🚪 Du bist raus." if removed else "Du warst nicht eingetragen."), ephemeral=True)
-
-    @discord.ui.button(label="🟡 AFK-Check", style=discord.ButtonStyle.primary, custom_id="slotbot_afk")
-    async def afk(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await safe_defer(interaction, ephemeral=True)
-        ev = EVENTS.get(self.ev_id)
-        if not ev:
-            return await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
-
-        t = now_utc()
-        if not afk_open(ev, t):
-            return await safe_send(interaction, content="⏳ AFK-Check ist erst 30 Minuten vor Start möglich.", ephemeral=True)
-
-        uid = interaction.user.id
-        participants = ev.setdefault("participants", [])
-        if uid not in participants:
-            return await safe_send(interaction, content="Du bist nicht in der Teilnehmerliste.", ephemeral=True)
-
-        afk_checked = set(ev.get("afk_checked", []))
-        afk_checked.add(uid)
-        ev["afk_checked"] = list(afk_checked)
-        save_events(EVENTS)
-
-        if interaction.guild:
-            await refresh_event_message(interaction.guild, ev)
-        await safe_send(interaction, content="✅ AFK-Check bestätigt.", ephemeral=True)
+    except Exception as e:
+        print("⚠️ on_interaction error:", e)
 
 # =========================
 # Background Scheduler
@@ -322,7 +345,7 @@ async def scheduler_loop():
             changed = False
 
             for ev_id, ev in list(EVENTS.items()):
-                if "guild_id" not in ev or "start_utc" not in ev:
+                if not isinstance(ev, dict) or "guild_id" not in ev or "start_utc" not in ev:
                     continue
 
                 guild = client.get_guild(int(ev["guild_id"]))
@@ -394,12 +417,12 @@ async def scheduler_loop():
 # =========================
 # Slash Commands
 # =========================
-@tree.command(name="test", description="Check ob SlotBot lebt")
+@tree.command(name="test", description="Check ob SlotBot lebt", guild=DEV_GUILD)
 async def test_cmd(interaction: discord.Interaction):
     await safe_defer(interaction, ephemeral=True)
     await safe_send(interaction, content="✅ SlotBot ist online und reagiert.", ephemeral=True)
 
-@tree.command(name="roll", description="Würfeln")
+@tree.command(name="roll", description="Würfeln", guild=DEV_GUILD)
 @app_commands.describe(sides="Wie viele Seiten? (Standard 100)", times="Wie oft würfeln? (Standard 1)")
 async def roll_cmd(interaction: discord.Interaction, sides: int = 100, times: int = 1):
     await safe_defer(interaction, ephemeral=False)
@@ -419,21 +442,16 @@ async def event_create(interaction: discord.Interaction, title: str, start_utc: 
     try:
         start_dt = parse_dt_utc(start_utc)
     except Exception as e:
-        return await safe_send(interaction, content=f"❌ {e}", ephemeral=True)
+        await safe_send(interaction, content=f"❌ {e}", ephemeral=True)
+        return
 
     slots = max(1, min(50, int(slots)))
     ev_id = str(uuid.uuid4())[:8]
 
     channel = interaction.channel
     if channel is None or not isinstance(channel, discord.abc.Messageable):
-        return await safe_send(interaction, content="❌ Kein gültiger Channel.", ephemeral=True)
-
-    # Guard: prevent duplicate creation on same interaction (Discord retries)
-    # We use interaction.id as a last-seen key in memory
-    last_key = f"__last_create_{interaction.id}"
-    if last_key in EVENTS:
-        return await safe_send(interaction, content="⚠️ Dieser Create wurde schon verarbeitet.", ephemeral=True)
-    EVENTS[last_key] = {"ts": now_utc().isoformat()}
+        await safe_send(interaction, content="❌ Kein gültiger Channel.", ephemeral=True)
+        return
 
     ev: Dict[str, Any] = {
         "event_id": ev_id,
@@ -460,9 +478,14 @@ async def event_create(interaction: discord.Interaction, title: str, start_utc: 
         except Exception:
             pass
 
-    EVENTS.pop(last_key, None)
     EVENTS[ev_id] = ev
     save_events(EVENTS)
+
+    # Register persistent view for this event immediately (so it survives restarts)
+    try:
+        client.add_view(EventView(ev_id))
+    except Exception:
+        pass
 
     await safe_send(interaction, content=f"✅ Event erstellt: **{title}** (ID: `{ev_id}`)", ephemeral=False)
 
@@ -473,7 +496,8 @@ async def event_edit(interaction: discord.Interaction, event_id: str, title: Opt
 
     ev = EVENTS.get(event_id)
     if not ev:
-        return await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+        await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+        return
 
     if title:
         ev["title"] = title
@@ -484,7 +508,8 @@ async def event_edit(interaction: discord.Interaction, event_id: str, title: Opt
             ev["reminders_sent"] = []
             ev["afk_finalized"] = False
         except Exception as e:
-            return await safe_send(interaction, content=f"❌ {e}", ephemeral=True)
+            await safe_send(interaction, content=f"❌ {e}", ephemeral=True)
+            return
 
     if slots is not None:
         new_slots = max(1, min(50, int(slots)))
@@ -511,7 +536,8 @@ async def event_delete(interaction: discord.Interaction, event_id: str):
 
     ev = EVENTS.get(event_id)
     if not ev:
-        return await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+        await safe_send(interaction, content="❌ Event nicht gefunden.", ephemeral=True)
+        return
 
     guild = client.get_guild(int(ev["guild_id"]))
     if guild:
@@ -552,17 +578,10 @@ tree.add_command(event_group)
 # =========================
 @client.event
 async def on_ready():
-    global _synced, _scheduler_task, _flask_started
+    global _scheduler_task
+    print("🚀 SlotBot ready:", client.user)
 
-    print(f"🚀 Starte SlotBot + Flask (Web Service stabil) ...")
-    print(f"🤖 Discord: bereit als {client.user}")
-
-    # Start flask exactly once
-    if not _flask_started:
-        _flask_started = True
-        threading.Thread(target=run_flask, daemon=True).start()
-
-    # Register persistent views for existing events so buttons work after restart
+    # Re-register persistent views for existing events (important after restart)
     for ev_id, ev in list(EVENTS.items()):
         if isinstance(ev, dict) and ev.get("event_id"):
             try:
@@ -570,16 +589,17 @@ async def on_ready():
             except Exception:
                 pass
 
-    # Sync slash commands exactly once
-    if not _synced:
-        try:
+    # Sync slash commands
+    try:
+        if DEV_GUILD:
+            await tree.sync(guild=DEV_GUILD)
+            print(f"✅ Slash Commands (DEV guild) synchronisiert: {DEV_GUILD_ID}")
+        else:
             await tree.sync()
-            _synced = True
-            print("✅ Slash Commands synchronisiert.")
-        except Exception as e:
-            print("⚠️ tree.sync failed:", e)
+            print("✅ Slash Commands global synchronisiert.")
+    except Exception as e:
+        print("⚠️ tree.sync failed:", e)
 
-    # Start scheduler exactly once
     if _scheduler_task is None or _scheduler_task.done():
         _scheduler_task = asyncio.create_task(scheduler_loop())
 
@@ -590,7 +610,9 @@ def main():
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN fehlt in den Environment Variablen!")
 
-    # NOTE: Flask starts in on_ready thread to avoid double-start on import.
+    # Start Flask immediately -> Render healthcheck always passes even if Discord takes time
+    threading.Thread(target=run_flask, daemon=True).start()
+
     client.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
