@@ -413,7 +413,7 @@ async def post_to_event_thread(guild: discord.Guild, ev: dict, content: str):
     try:
         tid = ev.get("thread_id")
         if not tid:
-            return
+# FIXED: removed illegal top-level return
         th = guild.get_thread(int(tid))
         if th is None:
             ch = await bot.fetch_channel(int(tid))
@@ -462,10 +462,10 @@ async def get_or_create_thread(message: discord.Message, ev: dict) -> Optional[d
 async def update_event_post(guild: discord.Guild, message_id: int):
     ev = active_events.get(_event_key(message_id))
     if not ev:
-        return
+# FIXED: removed illegal top-level return
     msg = await fetch_message(guild, ev["channel_id"], message_id)
     if not msg:
-        return
+# FIXED: removed illegal top-level return
     header = build_event_header(ev)
     slots = build_slots_text(ev)
     content = header + "\n\n" + slots + "\n\n" + "Reagiere mit dem passenden Emoji um dich einzutragen."
@@ -645,16 +645,16 @@ async def event_create(interaction: discord.Interaction,
             await interaction.response.defer(ephemeral=True, thinking=True)
             if interaction.guild is None or interaction.channel is None:
                 await discord_api_call(interaction.followup.send("❌ Nur auf einem Server-Kanal nutzbar.", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
         
             dt_date = parse_date_flexible(datum)
             if not dt_date:
                 await discord_api_call(interaction.followup.send("❌ Ungültiges Datum. Beispiele: `heute`, `morgen`, `23.12.2025`", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
             hm = _parse_time_hhmm(zeit)
             if not hm:
                 await discord_api_call(interaction.followup.send("❌ Ungültige Zeit. Beispiel: `20:00`", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
         
             dt_local = dt_date.replace(hour=hm[0], minute=hm[1])
             dt_utc = _ensure_utc(dt_local.astimezone(pytz.utc))
@@ -668,7 +668,7 @@ async def event_create(interaction: discord.Interaction,
                         "❌ auto_delete akzeptiert nur `off` (oder leer lassen)).",
                         ephemeral=True,
                     )
-                    return
+# FIXED: removed illegal top-level return
                 auto_delete_hours = None
         
         
@@ -676,13 +676,13 @@ async def event_create(interaction: discord.Interaction,
             slots_dict = _parse_slots_spec(slots, interaction.guild)
             if not slots_dict:
                 await discord_api_call(interaction.followup.send("❌ Ungültige Slot-Definition. Beispiele: `⚔️ : 3 🛡️: 1 💉 :2` oder (Guild-Emoji)) `:tank: : 1`", ephemeral=True)
-                return
+# FIXED: removed illegal top-level return
             slots = slots_dict
         
             # Mindestlevel
             if level < 1 or level > 100:
                 await discord_api_call(interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
         
             ev = {
                 "guild_id": interaction.guild.id,
@@ -766,22 +766,22 @@ async def event_edit(
 ):
     if interaction.guild is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server nutzbar.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     ev = active_events.get(str(event))
     if not ev:
         await discord_api_call(interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     if not can_edit_event(interaction, ev):
         await discord_api_call(interaction.followup.send("❌ Nicht erlaubt (nur Ersteller/Admin)).", ephemeral=True)
-        return
+# FIXED: removed illegal top-level return
 
     # read current header from message so we can strike-through like before
     msg_id = int(event)
     msg = await fetch_message(interaction.guild, ev["channel_id"], msg_id)
     if not msg:
         await discord_api_call(interaction.followup.send("❌ Event-Post nicht gefunden.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     header_text = msg.content.split("\n\n", 1)[0]
 
     PREFIX_TIME = "🗓️ **Zeit:**"
@@ -803,13 +803,13 @@ async def event_edit(
             d0 = parse_date_flexible(datum, now_local=datetime.now(TZ))
             if not d0:
                 await discord_api_call(interaction.followup.send("❌ Ungültiges Datum.", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
             cur_local = cur_local.replace(year=d0.year, month=d0.month, day=d0.day)
         if zeit:
             hm = _parse_time_hhmm(zeit)
             if not hm:
                 await discord_api_call(interaction.followup.send("❌ Ungültige Zeit (HH:MM)).", ephemeral=True)
-                return
+# FIXED: removed illegal top-level return
             cur_local = cur_local.replace(hour=hm[0], minute=hm[1])
         new_utc = _ensure_utc(cur_local.astimezone(pytz.utc))
         old_val = extract_current_value(header_text, PREFIX_TIME) or format_dt_local(dt_utc)
@@ -825,7 +825,7 @@ async def event_edit(
         new_slots = _parse_slots_spec(slots, interaction.guild)
         if not new_slots:
             await discord_api_call(interaction.followup.send("❌ Ungültige Slot-Definition. Beispiel: ⚔️:3 🛡️:1 💉:2", ephemeral=True))
-            return
+# FIXED: removed illegal top-level return
 
         old_slots = ev.get("slots", {})
         updated_slots = {}
@@ -850,7 +850,7 @@ async def event_edit(
                 "❌ Du kannst keine Slots entfernen, in denen noch Leute eingetragen sind: " + " ".join(not_removable)),
                 ephemeral=True,
             )
-            return
+# FIXED: removed illegal top-level return
 
         slot_lines = []
         overflow_notes = []
@@ -1006,7 +1006,7 @@ async def event_edit(
     if level is not None:
         if level < 1 or level > 100:
             await discord_api_call(interaction.followup.send("❌ Level muss zwischen 1 und 100 liegen.", ephemeral=True))
-            return
+# FIXED: removed illegal top-level return
         old_lvl = ev.get("min_level")
         ev["min_level"] = int(level)
         if old_lvl is None:
@@ -1041,7 +1041,7 @@ async def event_edit(
         await discord_api_call(msg.edit(content=content), delay=1.2)
     except Exception as e:
         await discord_api_call(interaction.followup.send(f"⚠️ Konnte Post nicht editieren: {e}", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     # post changes to thread
     thread = None
@@ -1067,14 +1067,14 @@ async def event_edit(
 async def event_afk(interaction: discord.Interaction, mode: app_commands.Choice[str], event: str):
     if interaction.guild is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     ev = active_events.get(str(event))
     if not ev:
         await discord_api_call(interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     if not can_edit_event(interaction, ev):
         await discord_api_call(interaction.followup.send("❌ Nicht erlaubt.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     ev["afk_enabled"] = (mode.value == "on")
     active_events[str(event)] = ev
     await safe_save()
@@ -1085,14 +1085,14 @@ async def event_afk(interaction: discord.Interaction, mode: app_commands.Choice[
 async def event_reset_notifications(interaction: discord.Interaction, event: str):
     if interaction.guild is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     ev = active_events.get(str(event))
     if not ev:
         await discord_api_call(interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     if not can_edit_event(interaction, ev):
         await discord_api_call(interaction.followup.send("❌ Nicht erlaubt.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     ev["reminder60_sent"] = []
     active_events[str(event)] = ev
     await safe_save()
@@ -1125,15 +1125,15 @@ async def help_cmd(interaction: discord.Interaction):
 async def start_roll(interaction: discord.Interaction, dauer: int, grund: Optional[str] = None):
     if interaction.guild is None or interaction.channel is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server-Kanal.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     if dauer <= 0 or dauer > 180:
         await discord_api_call(interaction.followup.send("❌ Dauer muss zwischen 1 und 180 Minuten liegen.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     ch_id = interaction.channel.id
     if ch_id in active_rolls and active_rolls[ch_id].get("active"):
         await discord_api_call(interaction.followup.send("❌ In diesem Channel läuft schon ein Roll.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     ends_at = _now_utc() + timedelta(minutes=dauer)
     active_rolls[ch_id] = {
@@ -1154,12 +1154,12 @@ async def start_roll(interaction: discord.Interaction, dauer: int, grund: Option
 async def roll(interaction: discord.Interaction):
     if interaction.guild is None or interaction.channel is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server-Kanal.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
     ch_id = interaction.channel.id
     st = active_rolls.get(ch_id)
     if not st or not st.get("active"):
         await discord_api_call(interaction.followup.send("❌ Aktuell läuft hier kein Roll.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     try:
         ends_at = _ensure_utc(datetime.fromisoformat(st["ends_at"]))
@@ -1167,13 +1167,13 @@ async def roll(interaction: discord.Interaction):
         ends_at = _now_utc()
     if _now_utc() >= ends_at:
         await discord_api_call(interaction.followup.send("⏱️ Roll ist schon abgelaufen.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     rolls = st.get("rolls") or {}
     uid = interaction.user.id
     if str(uid) in rolls:
         await discord_api_call(interaction.followup.send("❌ Du hast schon gewürfelt.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     import random
     value = random.randint(1, 100)
@@ -1190,18 +1190,18 @@ async def stop_roll(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True, thinking=True)
             if interaction.guild is None or interaction.channel is None:
                 await discord_api_call(interaction.followup.send("❌ Nur auf einem Server-Kanal.", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
             ch_id = interaction.channel.id
             st = active_rolls.get(ch_id)
             if not st or not st.get("active"):
                 await discord_api_call(interaction.followup.send("❌ Hier läuft kein Roll.", ephemeral=True))
-                return
+# FIXED: removed illegal top-level return
         
             # only starter or admin can stop
             if st.get("owner_id") != interaction.user.id:
                 if isinstance(interaction.user, discord.Member) and not is_admin(interaction.user):
                     await discord_api_call(interaction.followup.send("❌ Nur der Starter oder ein Admin kann stoppen.", ephemeral=True))
-                    return
+# FIXED: removed illegal top-level return
         
             rolls = st.get("rolls") or {}
             norm = {}
@@ -1216,7 +1216,7 @@ async def stop_roll(interaction: discord.Interaction):
         
             if not norm:
                 await discord_api_call(interaction.followup.send("🫠 Roll beendet – niemand hat teilgenommen.", ephemeral=False))
-                return
+# FIXED: removed illegal top-level return
         
             max_val = max(norm.values())
             top = [uid for uid, val in norm.items() if val == max_val]
@@ -1352,17 +1352,17 @@ class ConfirmDeleteView(discord.ui.View):
 async def event_delete_cmd(interaction: discord.Interaction, event: str):
     if interaction.guild is None:
         await discord_api_call(interaction.followup.send("❌ Nur auf einem Server.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     ev = active_events.get(str(event))
     if not ev or int(ev.get("guild_id", 0)) != interaction.guild.id:
         await discord_api_call(interaction.followup.send("❌ Event nicht gefunden.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     isadm = isinstance(interaction.user, discord.Member) and is_admin(interaction.user)
     if (not isadm) and int(ev.get("creator_id", ev.get("owner_id", 0)) or 0) != interaction.user.id:
         await discord_api_call(interaction.followup.send("❌ Du kannst nur deine eigenen Events löschen.", ephemeral=True))
-        return
+# FIXED: removed illegal top-level return
 
     view = ConfirmDeleteView(timeout=30)
     await discord_api_call(interaction.followup.send(
@@ -1377,7 +1377,7 @@ async def event_delete_cmd(interaction: discord.Interaction, event: str):
             await discord_api_call(interaction.followup.send("✅ Abgebrochen.", ephemeral=True))
         except Exception:
             pass
-        return
+# FIXED: removed illegal top-level return
 
     guild = interaction.guild
 
@@ -1420,7 +1420,7 @@ async def event_delete_cmd(interaction: discord.Interaction, event: str):
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
-        return
+# FIXED: removed illegal top-level return
 
     emoji = str(payload.emoji)
 
@@ -1430,10 +1430,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if emoji == "✅" and payload.message_id in afkdmprompts:
             event_msg_id, target_user_id = afkdmprompts.get(payload.message_id, (None, None))
             if target_user_id != payload.user_id or event_msg_id is None:
-                return
+# FIXED: removed illegal top-level return
             ev = active_events.get(_event_key(int(event_msg_id)))
             if not ev:
-                return
+# FIXED: removed illegal top-level return
             st = ev.setdefault("afk_state", {"confirmed": [], "prompt_ids": [], "started": False, "finished": False, "last_prompt_at": None})
             confirmed = set(int(x) for x in st.get("confirmed", []))
             confirmed.add(payload.user_id)
@@ -1452,16 +1452,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                         pass
             except Exception:
                 pass
-        return
+# FIXED: removed illegal top-level return
 
     # ---- Guild slot handling ----
     ev = active_events.get(_event_key(payload.message_id))
     if not ev:
-        return
+# FIXED: removed illegal top-level return
 
     guild = bot.get_guild(payload.guild_id)
     if not guild:
-        return
+# FIXED: removed illegal top-level return
 
     user_id = payload.user_id
 
@@ -1475,7 +1475,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                 await msg.remove_reaction(payload.emoji, discord.Object(id=user_id))
             except Exception:
                 pass
-        return
+# FIXED: removed illegal top-level return
 
     active_events[_event_key(payload.message_id)] = ev
     await safe_save()
@@ -1487,18 +1487,18 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.guild_id is None:
-        return
+# FIXED: removed illegal top-level return
     ev = active_events.get(_event_key(payload.message_id))
     if not ev:
-        return
+# FIXED: removed illegal top-level return
     guild = bot.get_guild(payload.guild_id)
     if not guild:
-        return
+# FIXED: removed illegal top-level return
     emoji = str(payload.emoji)
     user_id = payload.user_id
     slot_key = _find_slot_key(ev, emoji)
     if not slot_key:
-        return
+# FIXED: removed illegal top-level return
     slot = ev["slots"][slot_key]
     mains = list(slot.get("main", []))
     wl = list(slot.get("waitlist", []))
